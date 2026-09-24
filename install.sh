@@ -43,8 +43,9 @@ info()  { echo "    $*"; }
 warn()  { echo "    ${A}!${N} $*"; }
 die()   { echo "${R}Erreur :${N} $*" >&2; exit 1; }
 run()   { if [ "$DRY_RUN" = 1 ]; then echo "    (simulation) $*"; else "$@"; fi; }
-confirm() {   # confirm "question" : oui si --reboot/--reset déjà explicites ou TTY
-    [ -r /dev/tty ] || return 1
+has_tty() { ( exec < /dev/tty ) 2>/dev/null; }   # vrai terminal (même via curl | bash)
+confirm() {   # confirm "question" : non si aucun terminal ne permet de répondre
+    has_tty || return 1
     local answer; read -r -p "    $1 [o/N] " answer < /dev/tty || return 1
     [[ "$answer" =~ ^[oOyY] ]]
 }
@@ -138,7 +139,8 @@ title "Médias et configuration"
 if [ "$RESET" = 1 ] && { [ -d "$INSTALL_DIR/media" ] || [ -d "$INSTALL_DIR/data" ]; }; then
     count=$(find "$INSTALL_DIR/media" -maxdepth 1 -type f 2>/dev/null | wc -l)
     warn "--reset : $count fichier(s) de médias et la configuration vont être effacés."
-    if [ "$DRY_RUN" = 1 ] || [ ! -r /dev/tty ] || confirm "Confirmer l'effacement ?"; then
+    # sans terminal, --reset explicite vaut confirmation
+    if [ "$DRY_RUN" = 1 ] || ! has_tty || confirm "Confirmer l'effacement ?"; then
         run systemctl stop videoplayer videoplayer-web 2>/dev/null || true
         run rm -rf "$INSTALL_DIR/media" "$INSTALL_DIR/data"
     else
