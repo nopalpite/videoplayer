@@ -183,7 +183,6 @@ class Player:
             # séquence de démarrage : l'intro DarkSign, puis le contenu (ou le
             # tutoriel si rien n'est programmé) quand elle se termine
             self.state = "boot"
-            self.mpv.loop_file = "no"
             self.mpv.command("loadfile", str(SPLASH_INTRO), "replace")
             log.info("intro de démarrage")
         else:
@@ -315,7 +314,6 @@ class Player:
         self.loop_len = None
         self.current_sub = None
         self.mpv["sub-files"] = []
-        self.mpv.loop_file = "no"
         self.state = "setup"
         if outro.exists() and SPLASH_INTRO.exists():
             # intro générique + fin propre à l'adresse, enchaînées sans coupure ;
@@ -396,7 +394,6 @@ class Player:
             return False
         path = MEDIA_DIR / media
         self.mpv.mute = bool(muted)
-        self.mpv.loop_file = "inf" if loop else "no"
         sub = self.cfg["subtitles"].get(media) if kind == "video" else None
         subs = [str(MEDIA_DIR / sub)] if sub and (MEDIA_DIR / sub).is_file() else []
         self.mpv["sub-files"] = subs   # pris en compte au chargement du fichier
@@ -416,7 +413,11 @@ class Player:
             self.loop_len = None
             self.mpv.demuxer_lavf_o = ""
             target = path
-        self.mpv.command("loadfile", str(target), "replace")
+        # boucle passée au fichier lui-même : modifier l'option globale avant le
+        # chargement ferait reboucler le fichier précédent (l'intro, arrêtée
+        # sur sa dernière image) pendant la préparation du nouveau
+        self.mpv.command("loadfile", str(target), "replace", "-1",
+                         f"loop-file={'inf' if loop else 'no'}")
         self.current = media
         return True
 
