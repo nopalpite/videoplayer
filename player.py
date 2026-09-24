@@ -10,7 +10,7 @@ Modes :
                   vidéo, puis retour à l'accroche quand elle est terminée.
 
 Le backend web communique avec ce processus via un socket unix
-(voir common.player_request) : commandes status, reload, trigger.
+(voir common.player_request) : commandes status, reload, trigger, pause.
 """
 import datetime
 import json
@@ -167,6 +167,7 @@ class Player:
         self.playlist_pos = None   # entrée en cours de lecture
         self.entry_started = 0.0   # début d'affichage de l'entrée (images)
         self.last_press = 0.0
+        self.paused = False        # lecture mise en pause depuis l'interface
         self.last_error = None
         self.watcher = None
         self.splash_addresses = None
@@ -280,6 +281,20 @@ class Player:
             self.state = "loop" if self.current else "idle"
         self.intro_played = False
         log.info("configuration chargée : mode=%s", self.cfg["mode"])
+
+    def _on_pause(self, paused):
+        # pause depuis l'interface : l'image reste figée, le son s'arrête
+        if self.state not in ("loop", "attract", "triggered") or not self.current:
+            return
+        self.paused = bool(paused)
+        self.mpv.pause = self.paused
+        log.info("lecture %s", "en pause" if self.paused else "reprise")
+
+    def _resume(self):
+        # tout nouveau contenu (configuration, bouton, écran d'accueil) repart
+        if self.paused:
+            self.paused = False
+            self.mpv.pause = False
 
     def _on_button(self, gpio):
         if not self.cfg or self.cfg["mode"] != "interactive":
@@ -401,6 +416,7 @@ class Player:
             self.splash_waiting = True   # la dernière image de l'intro reste
             return
         self.splash_waiting = False
+        self._resume()
 
         key = self._splash_key(addresses)
         self.splash_addresses, self.splash_key = addresses, key
@@ -513,6 +529,7 @@ class Player:
             return self._play(playable[0]["media"] if playable else None,
                               loop=True, muted=muted)
 
+        self._resume()
         self.splash_shown = None
         self.playlist = []
         targets = []   # (fichier à charger, options propres à l'entrée)
@@ -552,6 +569,7 @@ class Player:
         return True
 
     def _play(self, media, loop, muted):
+        self._resume()
         self.splash_shown = None
         self.playlist = []
         self.playlist_pos = None
@@ -648,6 +666,7 @@ class Player:
             "media": self.current,
             "subtitles": self.current_sub,
             "gpio": self.current_gpio,
+            "paused": self.paused,
             "playlist": playlist,
             "position": position,
             "duration": duration,
@@ -667,6 +686,9 @@ class ControlHandler(socketserver.StreamRequestHandler):
                 resp = player.status()
             elif cmd == "reload":
                 player.events.put(("reload",))
+                resp = {"ok": True}
+            elif cmd == "pause":
+                player.events.put(("pause", bool(req.get("paused", True))))
                 resp = {"ok": True}
             elif cmd == "trigger":
                 player.events.put(("button", int(req["gpio"])))

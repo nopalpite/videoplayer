@@ -15,6 +15,8 @@ from transcode import INCOMING_DIR, Converter
 
 app = Flask(__name__)
 PORT = 8080
+SYSTEMCTL = "/usr/bin/systemctl"
+SYSTEM_ACTIONS = ("reboot", "poweroff")   # autorisées par /etc/sudoers.d/darksign
 
 _probe_cache = {}  # nom -> (mtime, infos)
 
@@ -228,6 +230,7 @@ def api_state():
         gpios=available_gpios(),
         player=player_status(),
         jobs=converter.list(),
+        system={"power": system_allowed("reboot")},
     )
 
 
@@ -332,6 +335,42 @@ def api_delete(name):
     path.unlink()
     if cfg["subtitles"].pop(path.name, None):   # vidéo supprimée
         save_config(cfg)
+    return jsonify(ok=True)
+
+
+@app.post("/api/player/pause")
+def api_pause():
+    paused = bool(request.get_json(force=True).get("paused", True))
+    try:
+        return jsonify(player_request("pause", paused=paused))
+    except OSError:
+        return jsonify(error="lecteur injoignable"), 503
+
+
+@app.post("/api/player/restart")
+def api_restart():
+    # rechargement de la configuration : la lecture repart du début
+    try:
+        return jsonify(player_request("reload"))
+    except OSError:
+        return jsonify(error="lecteur injoignable"), 503
+
+
+def system_allowed(action):
+    """Droit de redémarrer / éteindre (règle sudo posée par install.sh)."""
+    return subprocess.run(["sudo", "-n", "-l", SYSTEMCTL, action],
+                          capture_output=True).returncode == 0
+
+
+@app.post("/api/system/<action>")
+def api_system(action):
+    if action not in SYSTEM_ACTIONS:
+        return jsonify(error="action inconnue"), 404
+    if not system_allowed(action):
+        return jsonify(error="droits manquants : relancez l'installateur "
+                             "(sudo ./install.sh)"), 403
+    # la réponse part avant l'arrêt : systemctl rend la main tout de suite
+    subprocess.Popen(["sudo", "-n", SYSTEMCTL, action])
     return jsonify(ok=True)
 
 

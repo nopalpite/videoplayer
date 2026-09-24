@@ -14,7 +14,7 @@ des boutons sur les GPIO, administrée depuis une interface web.
 - `data/config.json` : configuration (écrite par l'interface)
 
 Les deux processus dialoguent via le socket unix `data/player.sock`
-(commandes `status`, `reload`, `trigger`).
+(commandes `status`, `reload`, `trigger`, `pause`).
 
 ## Installation
 

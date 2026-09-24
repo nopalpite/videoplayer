@@ -175,6 +175,20 @@ for group in video render audio gpio; do
 done
 info "$TARGET_USER : accès à l'écran (video, render), au son (audio) et aux GPIO (gpio)"
 
+# interface web : redémarrer / éteindre le Pi, et rien d'autre
+sudoers=/etc/sudoers.d/darksign
+rule="$TARGET_USER ALL=(root) NOPASSWD: /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    (simulation) $sudoers : $rule"
+elif [ "$(cat "$sudoers" 2>/dev/null)" != "$rule" ]; then
+    tmp="$(mktemp)"
+    echo "$rule" > "$tmp"
+    visudo -cqf "$tmp" || { rm -f "$tmp"; die "règle sudo invalide : $rule"; }
+    install -m 0440 "$tmp" "$sudoers"
+    rm -f "$tmp"
+fi
+info "$TARGET_USER : redémarrage et extinction du Pi depuis l'interface web"
+
 # --- 6. services -----------------------------------------------------------------
 title "Services"
 for unit in videoplayer videoplayer-web; do

@@ -125,6 +125,8 @@
              transform: translateY(100%); transition: transform .15s; }
   .savebar.show { transform: none; }
   .errors { color: var(--err); font-size: 13px; flex: 1; }
+  .transport { display: flex; gap: 6px; }
+  .system { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
            background: var(--text); color: var(--bg); padding: 8px 16px;
            border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s;
@@ -149,6 +151,10 @@
     <span class="dot" id="dot"></span>
     <span id="now">…</span>
     <span class="bar" id="progress" hidden><i></i></span>
+  </div>
+  <div class="transport" id="transport" hidden>
+    <button class="btn" id="pause">⏸ Pause</button>
+    <button class="btn" id="restart" title="Relance la playlist ou l'accroche depuis le début">↺ Recommencer</button>
   </div>
 </header>
 
@@ -240,6 +246,15 @@
       <tbody id="media"></tbody>
     </table>
   </section>
+
+  <section>
+    <h2>Système</h2>
+    <div class="system">
+      <button class="btn" id="reboot">Redémarrer le Pi</button>
+      <button class="btn danger" id="poweroff">Éteindre</button>
+    </div>
+    <p class="hint" id="system-hint"></p>
+  </section>
 </main>
 
 <div class="savebar" id="savebar">
@@ -253,7 +268,7 @@
 const $ = (id) => document.getElementById(id);
 let saved = null;   // configuration enregistrée
 let cfg = null;     // configuration en cours d'édition
-let media = [], gpios = [], player = null, jobs = [];
+let media = [], gpios = [], player = null, jobs = [], system = {};
 
 const fmtSize = (b) => b > 1e9 ? (b / 1e9).toFixed(1) + " Go"
   : b > 1e6 ? (b / 1e6).toFixed(0) + " Mo" : Math.ceil(b / 1e3) + " ko";
@@ -752,6 +767,7 @@ function renderStatus() {
   const now = $("now");
   const bar = $("progress");
   if (!player) {
+    $("transport").hidden = true;
     now.textContent = "Lecteur arrêté";
     bar.hidden = true;
     $("player-error").hidden = true;
@@ -767,6 +783,10 @@ function renderStatus() {
     now.append(" : ", b);
     if (pl && pl.repeat > 1) now.append(` · ${pl.pass}/${pl.repeat}`);
   }
+  if (player.paused) now.append(" · en pause");
+  const playing = ["loop", "attract", "triggered"].includes(player.state) && player.media;
+  $("transport").hidden = !playing;
+  $("pause").textContent = player.paused ? "▶ Reprendre" : "⏸ Pause";
   const showBar = (player.state === "triggered" || player.playlist) && player.duration;
   bar.hidden = !showBar;
   if (showBar) bar.firstChild.style.width = `${(player.position / player.duration) * 100}%`;
@@ -783,6 +803,8 @@ async function load() {
   jobs = data.jobs;
   saved = data.config;
   cfg = clone(saved);
+  system = data.system || {};
+  renderSystem();
   render();
   renderMedia();
   renderJobs();
@@ -791,11 +813,13 @@ async function load() {
 
 async function poll() {
   try {
+    const offline = !player;
     const prev = JSON.stringify([player?.state, player?.media, player?.gpio, player?.playlist?.index]);
     const doneBefore = jobs.filter((j) => j.state === "done").map((j) => j.id).join();
     const data = await (await fetch("/api/status")).json();
     player = data.player;
     jobs = data.jobs;
+    if (offline && player && !dirty()) load();   // retour après un redémarrage
     renderStatus();
     renderJobs();
     if (jobs.filter((j) => j.state === "done").map((j) => j.id).join() !== doneBefore) {
@@ -811,6 +835,44 @@ async function poll() {
     renderStatus();
   }
 }
+
+// --- commandes de lecture et système ---------------------------------------------
+
+$("pause").onclick = async () => {
+  const r = await fetch("/api/player/pause", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paused: !player?.paused }),
+  });
+  if (!r.ok) toast((await r.json()).error);
+  poll();
+};
+
+$("restart").onclick = async () => {
+  const r = await fetch("/api/player/restart", { method: "POST" });
+  toast(r.ok ? "Lecture relancée depuis le début" : (await r.json()).error);
+  poll();
+};
+
+function renderSystem() {
+  $("reboot").disabled = $("poweroff").disabled = !system.power;
+  $("system-hint").textContent = system.power
+    ? "Éteignez le Pi avant de couper l'alimentation : la carte SD ne risque rien."
+    : "Indisponible : relancez l'installateur (sudo ./install.sh) pour autoriser "
+      + "le redémarrage et l'extinction depuis cette page.";
+}
+
+async function power(action, question, done) {
+  if (!confirm(question)) return;
+  const r = await fetch(`/api/system/${action}`, { method: "POST" });
+  toast(r.ok ? done : (await r.json()).error);
+}
+
+$("reboot").onclick = () => power("reboot",
+  "Redémarrer le Pi ? La lecture s'interrompt environ une minute.",
+  "Redémarrage… la page se reconnectera toute seule");
+$("poweroff").onclick = () => power("poweroff",
+  "Éteindre le Pi ? Il faudra couper puis remettre l'alimentation pour le rallumer.",
+  "Extinction… vous pourrez couper l'alimentation dans quelques secondes");
 
 load();
 setInterval(poll, 1000);
