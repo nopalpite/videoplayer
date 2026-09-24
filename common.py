@@ -121,6 +121,34 @@ def network_addresses():
     return [addr for _, addr in sorted(found)]
 
 
+def network_status():
+    """Diagnostic réseau (pour l'écran « pas de connexion ») : Wi-Fi configuré
+    et son état, câble Ethernet branché ou non."""
+    def nmcli(*args):
+        return subprocess.run(["nmcli", "-t", *args], capture_output=True,
+                              text=True).stdout.splitlines()
+
+    wifi = {"present": False, "ssid": None, "state": None}
+    ethernet = {"present": False, "carrier": False}
+    for line in nmcli("-f", "DEVICE,TYPE,STATE", "device"):
+        dev, kind, state = (line.split(":") + ["", ""])[:3]
+        if kind == "wifi":
+            wifi.update(present=True, state=state)
+        elif kind == "ethernet":
+            ethernet["present"] = True
+            try:
+                ethernet["carrier"] = open(f"/sys/class/net/{dev}/carrier").read().strip() == "1"
+            except OSError:
+                pass
+    for line in nmcli("-f", "NAME,TYPE", "connection", "show"):
+        name, _, kind = line.rpartition(":")
+        if kind == "802-11-wireless":
+            ssid = nmcli("-g", "802-11-wireless.ssid", "connection", "show", name)
+            wifi["ssid"] = ssid[0] if ssid else name
+            break
+    return {"wifi": wifi, "ethernet": ethernet}
+
+
 def mdns_available():
     return subprocess.run(["systemctl", "is-active", "--quiet", "avahi-daemon"]
                           ).returncode == 0

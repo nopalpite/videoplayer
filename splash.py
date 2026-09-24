@@ -27,7 +27,7 @@ from PIL import Image, ImageDraw
 
 import brand
 from brand import ACCENT, MUTED, TEXT, font
-from common import mdns_available
+from common import mdns_available, network_status
 
 W, H = 1920, 1080
 FPS = 25
@@ -53,8 +53,82 @@ def _wrap(draw, text, fnt, width):
 
 # --- mise en page ----------------------------------------------------------
 
+ERROR = (248, 113, 113)
+OK = (74, 222, 128)
+
+
+def _footer(d, hostname, addresses):
+    d.line((LEFT, H - 120, RIGHT, H - 120), fill=LINE, width=2)
+    footer = font("Inter-Regular.otf", 24)
+    d.text((LEFT, H - 80), f"{hostname}  ·  {', '.join(addresses) or 'hors réseau'}",
+           font=footer, fill=MUTED, anchor="lm")
+    d.text((RIGHT, H - 80), "Cet écran disparaît dès qu'un contenu est programmé",
+           font=footer, fill=MUTED, anchor="rm")
+
+
+def offline_layer(status):
+    """Écran « pas de connexion » : diagnostic et pistes de résolution."""
+    hostname = socket.gethostname()
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    y = 250
+    d.text((LEFT, y), "Pas de connexion réseau",
+           font=font("InterDisplay-SemiBold.otf", 72), fill=TEXT)
+    y += 112
+    body = font("Inter-Regular.otf", 30)
+    for line in _wrap(d, "Aucun contenu n'est programmé et le lecteur n'a pas pu se "
+                      "connecter au réseau : l'interface d'administration est "
+                      "inaccessible pour le moment.", body, 1300):
+        d.text((LEFT, y), line, font=body, fill=MUTED)
+        y += 44
+    y += 34
+
+    wifi, eth = status["wifi"], status["ethernet"]
+    rows = []
+    if wifi["present"]:
+        if wifi["ssid"]:
+            rows.append((ERROR, "Wi-Fi", f"« {wifi['ssid']} » configuré, "
+                         "mais pas de connexion"))
+        else:
+            rows.append((ERROR, "Wi-Fi", "aucun réseau Wi-Fi configuré"))
+    if eth["present"]:
+        rows.append((ACCENT, "Câble Ethernet", "branché, en attente d'une adresse")
+                    if eth["carrier"]
+                    else (MUTED, "Câble Ethernet", "non branché"))
+    card_h = 40 + 62 * len(rows)
+    d.rounded_rectangle((LEFT, y, RIGHT, y + card_h), radius=18, fill=CARD,
+                        outline=LINE, width=2)
+    label = font("Inter-SemiBold.otf", 30)
+    value = font("Inter-Regular.otf", 30)
+    ry = y + 20 + 31
+    for color, name, text in rows:
+        d.ellipse((LEFT + 40, ry - 8, LEFT + 56, ry + 8), fill=color)
+        d.text((LEFT + 80, ry), name, font=label, fill=TEXT, anchor="lm")
+        d.text((LEFT + 340, ry), text, font=value, fill=MUTED, anchor="lm")
+        ry += 62
+    y += card_h + 56
+
+    steps = ["Branchez un câble Ethernet relié au réseau : la connexion est automatique"]
+    if wifi["ssid"]:
+        steps.append(f"Ou vérifiez que le Wi-Fi « {wifi['ssid']} » est allumé, à portée, "
+                     "et que son mot de passe n'a pas changé")
+    steps.append("Cet écran se met à jour dès que le réseau est disponible")
+    step_font = font("Inter-Regular.otf", 30)
+    num_font = font("Inter-SemiBold.otf", 25)
+    for i, step in enumerate(steps, 1):
+        cy = y + 22
+        d.ellipse((LEFT, cy - 21, LEFT + 42, cy + 21), outline=ACCENT, width=3)
+        d.text((LEFT + 21, cy), str(i), font=num_font, fill=ACCENT, anchor="mm")
+        d.text((LEFT + 68, cy), step, font=step_font, fill=TEXT, anchor="lm")
+        y += 60
+    _footer(d, hostname, [])
+    return img
+
+
 def info_layer(addresses, port):
     """Tout l'écran sauf le logo, sur fond transparent (RGBA)."""
+    if not addresses:
+        return offline_layer(network_status())
     hostname = socket.gethostname()
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -68,16 +142,13 @@ def info_layer(addresses, port):
     body = font("Inter-Regular.otf", 30)
     intro = ("Aucun contenu n'est encore programmé. Depuis un ordinateur ou un "
              "téléphone connecté au même réseau, ouvrez l'interface "
-             "d'administration :") if addresses else (
-             "Aucun contenu n'est encore programmé, et le lecteur n'est pas "
-             "encore connecté au réseau. Branchez un câble Ethernet ou "
-             "configurez le Wi-Fi : l'adresse d'administration apparaîtra ici.")
+             "d'administration :")
     for line in _wrap(d, intro, body, col_w):
         d.text((LEFT, y), line, font=body, fill=MUTED)
         y += 44
     y += 28
 
-    url = f"http://{addresses[0]}:{port}" if addresses else None
+    url = f"http://{addresses[0]}:{port}"
     if url:
         d.rounded_rectangle((LEFT, y, LEFT + col_w, y + 124), radius=18,
                             fill=CARD, outline=LINE, width=2)
@@ -92,10 +163,6 @@ def info_layer(addresses, port):
             d.text((LEFT + 4, y), "ou  " + "   ·   ".join(alt),
                    font=font("Inter-Regular.otf", 28), fill=MUTED)
         y += 74
-    else:
-        d.text((LEFT, y), "En attente du réseau…",
-               font=font("InterDisplay-SemiBold.otf", 56), fill=TEXT)
-        y += 140
 
     steps = ["Envoyez vos vidéos et images dans la médiathèque",
              "Choisissez le mode : boucle simple ou interactif (boutons)",
@@ -128,12 +195,7 @@ def info_layer(addresses, port):
         d.text((cx + size / 2, cy + size + pad + 42), "Scanner pour administrer",
                font=font("Inter-Medium.otf", 28), fill=MUTED, anchor="mm")
 
-    d.line((LEFT, H - 120, RIGHT, H - 120), fill=LINE, width=2)
-    footer = font("Inter-Regular.otf", 24)
-    d.text((LEFT, H - 80), f"{hostname}  ·  {', '.join(addresses) or 'hors réseau'}",
-           font=footer, fill=MUTED, anchor="lm")
-    d.text((RIGHT, H - 80), "Cet écran disparaît dès qu'un contenu est programmé",
-           font=footer, fill=MUTED, anchor="rm")
+    _footer(d, hostname, addresses)
     return img
 
 

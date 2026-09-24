@@ -63,6 +63,14 @@ supprimé), l'écran affiche l'adresse de l'interface d'administration, le nom
 les 10 s) et disparaît dès qu'un contenu est enregistré. Une accroche laissée
 sur « écran noir » avec des boutons configurés reste un écran noir.
 
+Au démarrage, si le réseau n'est pas encore là à la fin de l'intro (le
+Wi-Fi met souvent ~50 s), le logo reste affiché jusqu'à 30 s en attendant une
+adresse. Passé ce délai, un écran « Pas de connexion réseau » affiche un
+diagnostic (Wi-Fi configuré ou non, câble Ethernet branché ou non) et les
+pistes de résolution ; il se met à jour dès que l'état change. Un lecteur
+configuré, lui, lit son contenu avec ou sans réseau. En filaire, la connexion
+est automatique (DHCP) et l'adresse filaire est affichée en priorité.
+
 L'écran s'ouvre sur une animation (~7 s) : un soleil, la lune qui l'éclipse,
 la couronne qui devient le logo, puis les informations. Elle est en deux
 parties enchaînées sans coupure : `assets/intro.mp4`, générique et livrée

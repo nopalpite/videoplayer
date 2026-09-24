@@ -29,7 +29,8 @@ import mpv
 from gpiod.line import Bias, Direction, Edge
 
 from common import (BASE, DATA_DIR, MEDIA_DIR, SOCKET_PATH, SUBTITLE_SIZES,
-                    load_config, mdns_available, media_kind, network_addresses)
+                    load_config, mdns_available, media_kind, network_addresses,
+                    network_status)
 
 log = logging.getLogger("player")
 
@@ -307,8 +308,11 @@ class Player:
         # toute retouche du rendu (fichiers source, intro) invalide le cache
         sources = [BASE / "splash.py", BASE / "brand.py", SPLASH_INTRO]
         stamp = [f.stat().st_mtime if f.exists() else 0 for f in sources]
+        # sans réseau, l'écran affiche un diagnostic (Wi-Fi, câble) : il fait
+        # partie de la clé pour être redessiné quand l'état change
+        diag = None if addresses else network_status()
         data = json.dumps([socket.gethostname(), WEB_PORT, addresses,
-                           mdns_available(), stamp])
+                           mdns_available(), stamp, diag])
         return hashlib.sha1(data.encode()).hexdigest()[:12]
 
     def _show_splash(self, context="enter"):
@@ -407,8 +411,12 @@ class Player:
         if time.monotonic() - self.splash_checked < SPLASH_CHECK:
             return
         self.splash_checked = time.monotonic()
-        if network_addresses() != self.splash_addresses:
+        addresses = network_addresses()
+        if addresses != self.splash_addresses:
             log.info("adresse réseau modifiée : écran d'accueil mis à jour")
+            self._show_splash("change")
+        elif not addresses and self._splash_key(addresses) != self.splash_key:
+            log.info("état du réseau modifié : diagnostic mis à jour")
             self._show_splash("change")
 
     def _show_attract(self):
