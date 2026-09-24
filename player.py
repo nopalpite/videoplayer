@@ -24,10 +24,16 @@ import gpiod
 import mpv
 from gpiod.line import Bias, Direction, Edge
 
+import splash
+
 from common import (DATA_DIR, MEDIA_DIR, SOCKET_PATH, SUBTITLE_SIZES,
                     load_config, media_kind)
 
 log = logging.getLogger("player")
+
+SPLASH_IMAGE = DATA_DIR / "splash.png"
+SPLASH_CHECK = 10    # s : vérification de l'adresse réseau sur l'écran d'accueil
+WEB_PORT = 8080
 
 PRESS_LOCKOUT = 0.3  # s : ignore les appuis trop rapprochés (rebonds, double appui)
 
@@ -117,7 +123,7 @@ class Player:
     def __init__(self):
         self.events = queue.Queue()
         self.cfg = None
-        self.state = "idle"        # idle | loop | attract | triggered
+        self.state = "idle"        # idle | setup | loop | attract | triggered
         self.current = None        # nom du média affiché
         self.current_sub = None    # sous-titres associés au média affiché
         self.current_gpio = None   # broche ayant lancé la vidéo en cours
@@ -126,6 +132,8 @@ class Player:
         self.last_press = 0.0
         self.last_error = None
         self.watcher = None
+        self.splash_addresses = None
+        self.splash_checked = 0.0
 
         self.mpv = mpv.MPV(
             vo="gpu", gpu_context="drm", hwdec="v4l2m2m", ao="alsa",
@@ -163,6 +171,7 @@ class Player:
             try:
                 ev, *args = self.events.get(timeout=1)
             except queue.Empty:
+                self._refresh_splash()
                 continue
             try:
                 if ev == "quit":
@@ -203,6 +212,8 @@ class Player:
             loop = self.cfg["loop"]
             self._play(loop["media"], loop=True, muted=loop["muted"])
             self.state = "loop" if self.current else "idle"
+        if self.state == "idle" and self._needs_setup():
+            self._show_splash()
         log.info("configuration chargée : mode=%s", self.cfg["mode"])
 
     def _on_button(self, gpio):
@@ -240,6 +251,47 @@ class Player:
             self._show_attract()
 
     # --- actions -------------------------------------------------------------
+
+    def _playable(self, media):
+        return bool(media) and media_kind(media) in ("video", "image") \
+            and (MEDIA_DIR / media).is_file()
+
+    def _needs_setup(self):
+        """Rien de programmé : ni boucle, ni accroche, ni bouton utilisable.
+
+        Une accroche vide avec des boutons configurés reste un écran noir
+        voulu (option « écran noir » de l'interface).
+        """
+        if self.cfg["mode"] == "loop":
+            return not self._playable(self.cfg["loop"]["media"])
+        inter = self.cfg["interactive"]
+        return not self._playable(inter["attract"]) and not any(
+            self._playable(t.get("media")) for t in inter["triggers"])
+
+    def _show_splash(self):
+        addresses = splash.network_addresses()
+        if addresses != self.splash_addresses or not SPLASH_IMAGE.exists():
+            splash.render(SPLASH_IMAGE, addresses, WEB_PORT)
+        self.splash_addresses = addresses
+        self.splash_checked = time.monotonic()
+        self.loop_len = None
+        self.current_sub = None
+        self.mpv["sub-files"] = []
+        self.mpv.demuxer_lavf_o = ""
+        self.mpv.loop_file = "no"
+        self.mpv.command("loadfile", str(SPLASH_IMAGE), "replace")
+        self.state = "setup"
+
+    def _refresh_splash(self):
+        # l'adresse IP peut arriver après le démarrage (DHCP, Wi-Fi) ou changer
+        if self.state != "setup":
+            return
+        if time.monotonic() - self.splash_checked < SPLASH_CHECK:
+            return
+        self.splash_checked = time.monotonic()
+        if splash.network_addresses() != self.splash_addresses:
+            log.info("adresse réseau modifiée : écran d'accueil mis à jour")
+            self._show_splash()
 
     def _show_attract(self):
         inter = self.cfg["interactive"]

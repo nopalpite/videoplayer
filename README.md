@@ -7,6 +7,7 @@ des boutons sur les GPIO, administrée depuis une interface web.
 - `web.py` : interface d'administration sur le port 8080, service `videoplayer-web`
 - `common.py` : configuration, médias, GPIO disponibles, dialogue avec le lecteur
 - `transcode.py` : file de conversion des vidéos importées
+- `splash.py` : écran d'accueil affiché tant que rien n'est programmé
 - `media/` : vidéos et images envoyées depuis l'interface
 - `data/config.json` : configuration (écrite par l'interface)
 
@@ -15,7 +16,8 @@ Les deux processus dialoguent via le socket unix `data/player.sock`
 
 ## Installation
 
-    sudo apt install mpv python3-mpv python3-flask python3-libgpiod python3-pil ffmpeg
+    sudo apt install mpv python3-mpv python3-flask python3-libgpiod python3-pil \
+        python3-qrcode fonts-inter ffmpeg
     sudo cp systemd/*.service /etc/systemd/system/
     sudo systemctl enable --now videoplayer videoplayer-web
 
@@ -31,6 +33,14 @@ Pour tester sans bouton câblé : [gpio-web](https://github.com/nopalpite/gpio-w
 - **Interactif** : une accroche (vidéo ou image) tourne en boucle ; un appui
   sur un bouton lance la vidéo associée, puis retour à l'accroche à la fin.
   Option : un appui peut ou non interrompre la vidéo en cours.
+
+## Écran d'accueil
+
+Tant qu'aucun contenu n'est programmé (premier lancement, ou média
+supprimé), l'écran affiche l'adresse de l'interface d'administration, le nom
+`.local` et un QR code. Il se met à jour si l'adresse réseau change (toutes
+les 10 s) et disparaît dès qu'un contenu est enregistré. Une accroche laissée
+sur « écran noir » avec des boutons configurés reste un écran noir.
 
 ## Matériel
 
