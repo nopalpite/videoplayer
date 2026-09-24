@@ -20,19 +20,25 @@ import subprocess
 import threading
 import time
 
+import hashlib
+import socket
+import sys
+
 import gpiod
 import mpv
 from gpiod.line import Bias, Direction, Edge
 
-import splash
-
-from common import (DATA_DIR, MEDIA_DIR, SOCKET_PATH, SUBTITLE_SIZES,
-                    load_config, media_kind)
+from common import (BASE, DATA_DIR, MEDIA_DIR, SOCKET_PATH, SUBTITLE_SIZES,
+                    load_config, mdns_available, media_kind, network_addresses)
 
 log = logging.getLogger("player")
 
-SPLASH_IMAGE = DATA_DIR / "splash.png"
+# Écran d'accueil DarkSign (splash.py) : image fixe tout de suite, puis
+# animation d'intro une fois calculée. Rendu dans un processus séparé (numpy,
+# Pillow) pour garder le lecteur léger ; résultat mis en cache par adresse.
 SPLASH_CHECK = 10    # s : vérification de l'adresse réseau sur l'écran d'accueil
+SPLASH_INTRO = BASE / "assets" / "intro.mp4"
+SPLASH_LIST = DATA_DIR / "splash.ffconcat"
 WEB_PORT = 8080
 
 PRESS_LOCKOUT = 0.3  # s : ignore les appuis trop rapprochés (rebonds, double appui)
@@ -134,6 +140,8 @@ class Player:
         self.watcher = None
         self.splash_addresses = None
         self.splash_checked = 0.0
+        self.splash_key = None
+        self.splash_jobs = set()     # clés en cours de calcul
 
         self.mpv = mpv.MPV(
             vo="gpu", gpu_context="drm", hwdec="v4l2m2m", ao="alsa",
@@ -268,19 +276,73 @@ class Player:
         return not self._playable(inter["attract"]) and not any(
             self._playable(t.get("media")) for t in inter["triggers"])
 
+    @staticmethod
+    def _splash_key(addresses):
+        # toute retouche du rendu (fichiers source, intro) invalide le cache
+        sources = [BASE / "splash.py", BASE / "brand.py", SPLASH_INTRO]
+        stamp = [f.stat().st_mtime if f.exists() else 0 for f in sources]
+        data = json.dumps([socket.gethostname(), WEB_PORT, addresses,
+                           mdns_available(), stamp])
+        return hashlib.sha1(data.encode()).hexdigest()[:12]
+
     def _show_splash(self):
-        addresses = splash.network_addresses()
-        if addresses != self.splash_addresses or not SPLASH_IMAGE.exists():
-            splash.render(SPLASH_IMAGE, addresses, WEB_PORT)
-        self.splash_addresses = addresses
+        addresses = network_addresses()
+        key = self._splash_key(addresses)
+        self.splash_addresses, self.splash_key = addresses, key
         self.splash_checked = time.monotonic()
+        image = DATA_DIR / f"splash-{key}.png"
+        outro = DATA_DIR / f"splash-{key}.mp4"
+
         self.loop_len = None
         self.current_sub = None
         self.mpv["sub-files"] = []
-        self.mpv.demuxer_lavf_o = ""
         self.mpv.loop_file = "no"
-        self.mpv.command("loadfile", str(SPLASH_IMAGE), "replace")
         self.state = "setup"
+        if outro.exists() and SPLASH_INTRO.exists():
+            # intro générique + fin propre à l'adresse, enchaînées sans coupure ;
+            # mpv garde ensuite la dernière image (l'écran d'accueil)
+            SPLASH_LIST.write_text(f"ffconcat version 1.0\nfile '{SPLASH_INTRO}'\n"
+                                   f"file '{outro}'\n")
+            self.mpv.demuxer_lavf_o = "safe=0"
+            self.mpv.command("loadfile", str(SPLASH_LIST), "replace")
+        else:
+            self.mpv.demuxer_lavf_o = ""
+            if image.exists():
+                self.mpv.command("loadfile", str(image), "replace")
+            else:
+                self.mpv.command("stop")
+            self._build_splash(key, addresses, image, outro)
+
+    def _build_splash(self, key, addresses, image, outro):
+        if key in self.splash_jobs:
+            return
+        self.splash_jobs.add(key)
+
+        def run():
+            script = [sys.executable, str(BASE / "splash.py")]
+            args = [str(WEB_PORT), *addresses]
+            try:
+                for kind, out in (("static", image), ("animate", outro)):
+                    if not out.exists():
+                        subprocess.run(["nice", "-n", "10", *script, kind, str(out),
+                                        *args], check=True, timeout=1800,
+                                       stdout=subprocess.DEVNULL)
+                        self.events.put(("splash_ready", key))
+                # ménage : anciens écrans (autre adresse, ancien rendu)
+                for old in DATA_DIR.glob("splash-*"):
+                    if key not in old.name:
+                        old.unlink(missing_ok=True)
+                log.info("écran d'accueil animé prêt")
+            except (subprocess.SubprocessError, OSError) as e:
+                log.error("rendu de l'écran d'accueil impossible : %s", e)
+            finally:
+                self.splash_jobs.discard(key)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_splash_ready(self, key):
+        if self.state == "setup" and key == self.splash_key:
+            self._show_splash()
 
     def _refresh_splash(self):
         # l'adresse IP peut arriver après le démarrage (DHCP, Wi-Fi) ou changer
@@ -289,7 +351,7 @@ class Player:
         if time.monotonic() - self.splash_checked < SPLASH_CHECK:
             return
         self.splash_checked = time.monotonic()
-        if splash.network_addresses() != self.splash_addresses:
+        if network_addresses() != self.splash_addresses:
             log.info("adresse réseau modifiée : écran d'accueil mis à jour")
             self._show_splash()
 

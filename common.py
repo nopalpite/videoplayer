@@ -109,6 +109,23 @@ def available_gpios():
     ]
 
 
+def network_addresses():
+    """Adresses IPv4 du Pi (hors boucle locale), interface filaire en tête."""
+    out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"],
+                         capture_output=True, text=True).stdout
+    found = []
+    for line in out.splitlines():
+        parts = line.split()
+        iface, addr = parts[1], parts[3].split("/")[0]
+        found.append((0 if iface.startswith(("eth", "en")) else 1, addr))
+    return [addr for _, addr in sorted(found)]
+
+
+def mdns_available():
+    return subprocess.run(["systemctl", "is-active", "--quiet", "avahi-daemon"]
+                          ).returncode == 0
+
+
 def player_request(cmd, **args):
     """Envoie une commande au lecteur via le socket unix, renvoie sa réponse."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:

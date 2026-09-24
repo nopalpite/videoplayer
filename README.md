@@ -1,13 +1,15 @@
-# Lecteur vidéo GPIO
+# darksign
 
-Lecture plein écran sur la sortie HDMI du Pi (mpv, sans bureau) pilotée par
+Lecteur vidéo pour Raspberry Pi — un petit pied de nez à BrightSign. Lecture plein écran sur la sortie HDMI du Pi (mpv, sans bureau) pilotée par
 des boutons sur les GPIO, administrée depuis une interface web.
 
 - `player.py` : lecteur (mpv + gpiod), service `videoplayer`
 - `web.py` : interface d'administration sur le port 8080, service `videoplayer-web`
 - `common.py` : configuration, médias, GPIO disponibles, dialogue avec le lecteur
 - `transcode.py` : file de conversion des vidéos importées
-- `splash.py` : écran d'accueil affiché tant que rien n'est programmé
+- `splash.py` : écran d'accueil (image fixe et animation d'intro)
+- `brand.py` : identité DarkSign (logo éclipse, mot-symbole, rendu du halo)
+- `assets/intro.mp4` : intro animée générique (éclipse), générée par `splash.py intro`
 - `media/` : vidéos et images envoyées depuis l'interface
 - `data/config.json` : configuration (écrite par l'interface)
 
@@ -17,7 +19,7 @@ Les deux processus dialoguent via le socket unix `data/player.sock`
 ## Installation
 
     sudo apt install mpv python3-mpv python3-flask python3-libgpiod python3-pil \
-        python3-qrcode fonts-inter ffmpeg
+        python3-qrcode python3-numpy fonts-inter ffmpeg
     sudo cp systemd/*.service /etc/systemd/system/
     sudo systemctl enable --now videoplayer videoplayer-web
 
@@ -41,6 +43,16 @@ supprimé), l'écran affiche l'adresse de l'interface d'administration, le nom
 `.local` et un QR code. Il se met à jour si l'adresse réseau change (toutes
 les 10 s) et disparaît dès qu'un contenu est enregistré. Une accroche laissée
 sur « écran noir » avec des boutons configurés reste un écran noir.
+
+L'écran s'ouvre sur une animation (~7 s) : un soleil, la lune qui l'éclipse,
+la couronne qui devient le logo, puis les informations. Elle est en deux
+parties enchaînées sans coupure : `assets/intro.mp4`, générique et livrée
+avec le projet, et une fin propre à l'adresse réseau, calculée par le lecteur
+en tâche de fond (~40 s sur un Pi 3, ~170 Mo de mémoire) puis mise en cache
+dans `data/`. En attendant, l'image fixe est affichée.
+
+Après une retouche de `brand.py` ou du début de l'animation dans `splash.py`,
+régénérer l'intro : `python3 splash.py intro` (quelques minutes sur un Pi 3).
 
 ## Matériel
 

@@ -3,18 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lecteur vidéo</title>
+<title>DarkSign</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2032%2032%22%20aria-hidden%3D%22true%22%3E%3Cdefs%3E%3CradialGradient%20id%3D%22c%22%3E%3Cstop%20offset%3D%220.58%22%20stop-color%3D%22%23ffb054%22%20stop-opacity%3D%220%22/%3E%3Cstop%20offset%3D%220.63%22%20stop-color%3D%22%23fff3e0%22/%3E%3Cstop%20offset%3D%220.74%22%20stop-color%3D%22%23ffa23e%22%20stop-opacity%3D%22.75%22/%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23ff9030%22%20stop-opacity%3D%220%22/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2216%22%20fill%3D%22url%28%23c%29%22/%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%229.8%22%20fill%3D%22%230b0c0f%22/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --border: #e3e6ea; --text: #1d2228;
-    --muted: #6b7480; --accent: #2563eb; --ok: #16a34a; --warn: #b45309;
+    --muted: #6b7480; --accent: #c05621; --on-accent: #fff; --ok: #16a34a;
+    --warn: #a16207;
     --err: #dc2626; --soft: #f0f2f5; --warn-bg: #fef3c7;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #111418; --card: #1a1f25; --border: #2a313a; --text: #e6e9ed;
-      --muted: #8b95a1; --soft: #222831; --warn: #f59e0b; --warn-bg: #3b2f0b;
+      --muted: #8b95a1; --soft: #222831; --warn: #facc15; --warn-bg: #3b2f0b;
+      --accent: #f5a524; --on-accent: #1a1206;
     }
   }
   * { box-sizing: border-box; }
@@ -24,7 +27,10 @@
     justify-content: space-between; padding: 16px 24px;
     border-bottom: 1px solid var(--border); background: var(--card);
   }
-  h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  h1 { display: flex; align-items: center; gap: 10px; margin: 0;
+       font-size: 21px; font-weight: 300; letter-spacing: -0.01em; }
+  h1 b { font-weight: 650; }
+  h1 svg { width: 30px; height: 30px; flex: none; }
   h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
   h3 { font-size: 13px; font-weight: 600; margin: 20px 0 10px; color: var(--muted);
        text-transform: uppercase; letter-spacing: .04em; }
@@ -48,7 +54,7 @@
   .seg button { font: inherit; padding: 8px 16px; border: 0; background: transparent;
                 color: var(--muted); cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--border); }
-  .seg button.on { background: var(--accent); color: #fff; }
+  .seg button.on { background: var(--accent); color: var(--on-accent); }
 
   .field { display: grid; grid-template-columns: 180px 1fr; gap: 10px 16px;
            align-items: center; margin-bottom: 12px; }
@@ -65,8 +71,9 @@
                color: var(--text); cursor: pointer; }
   button.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button.btn:disabled { opacity: .45; cursor: default; }
-  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.btn.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.1); }
+  button.btn.primary { background: var(--accent); border-color: var(--accent);
+                       color: var(--on-accent); }
+  button.btn.primary:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.1); }
   button.btn.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
 
   table { width: 100%; border-collapse: collapse; }
@@ -125,7 +132,7 @@
 </head>
 <body>
 <header>
-  <h1>Lecteur vidéo</h1>
+  <h1><svg viewBox="0 0 32 32" aria-hidden="true"><defs><radialGradient id="corona"><stop offset="0.58" stop-color="#ffb054" stop-opacity="0"/><stop offset="0.63" stop-color="#fff3e0"/><stop offset="0.74" stop-color="#ffa23e" stop-opacity=".75"/><stop offset="1" stop-color="#ff9030" stop-opacity="0"/></radialGradient></defs><circle cx="16" cy="16" r="16" fill="url(#corona)"/><circle cx="16" cy="16" r="9.8" fill="#0b0c0f"/></svg><span>dark<b>sign</b></span></h1>
   <div class="now">
     <span class="dot" id="dot"></span>
     <span id="now">…</span>
