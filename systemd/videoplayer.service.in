@@ -10,10 +10,10 @@ Conflicts=shutdown.target
 Before=shutdown.target
 
 [Service]
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/videoplayer
-ExecStart=/usr/bin/python3 /home/pi/videoplayer/player.py
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/python3 @DIR@/player.py
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=2

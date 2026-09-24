@@ -542,6 +542,7 @@ def main():
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)   # socket, listes, écrans d'accueil
     player = Player()
 
     if os.path.exists(SOCKET_PATH):

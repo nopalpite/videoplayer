@@ -4,10 +4,10 @@ Description=Interface web du lecteur vidéo (port 8080)
 After=network.target
 
 [Service]
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/videoplayer
-ExecStart=/usr/bin/python3 /home/pi/videoplayer/web.py
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/python3 @DIR@/web.py
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=2
