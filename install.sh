@@ -179,6 +179,12 @@ done
 run systemctl daemon-reload
 run systemctl enable -q videoplayer videoplayer-web
 info "videoplayer (lecteur, démarré dès que l'écran est prêt) et videoplayer-web (port 8080)"
+for unit in videoplayer videoplayer-web; do   # mise à jour : nouveau code chargé
+    if systemctl is-active -q "$unit"; then
+        run systemctl restart "$unit"
+        info "$unit relancé"
+    fi
+done
 
 # --- 7. démarrage silencieux --------------------------------------------------------
 title "Démarrage silencieux"
