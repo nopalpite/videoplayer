@@ -1,0 +1,22 @@
+[Unit]
+StartLimitIntervalSec=0
+Description=Interface web du lecteur vidéo (port 8080)
+After=network.target
+
+[Service]
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/videoplayer
+ExecStart=/usr/bin/python3 /home/pi/videoplayer/web.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=2
+# conversions : au-delà de ce plafond, ffmpeg est arrêté plutôt que de bloquer le Pi
+MemoryHigh=300M
+MemoryMax=400M
+# actif même sans contrôleur mémoire : en cas de manque, la conversion est
+# arrêtée en premier (ffmpeg hérite de ce réglage)
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=multi-user.target

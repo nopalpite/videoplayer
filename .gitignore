@@ -1,0 +1,6 @@
+# médias envoyés depuis l'interface (volumineux)
+media/
+# état propre à l'installation : configuration, liste de boucle, socket
+data/
+__pycache__/
+*.pyc

@@ -1,0 +1,18 @@
+[Unit]
+StartLimitIntervalSec=0
+Description=Lecteur vidéo plein écran piloté par GPIO (mpv)
+After=systemd-user-sessions.service sound.target
+
+[Service]
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/videoplayer
+ExecStart=/usr/bin/python3 /home/pi/videoplayer/player.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=2
+# le lecteur est le dernier processus sacrifié en cas de manque de mémoire
+OOMScoreAdjust=-800
+
+[Install]
+WantedBy=multi-user.target
