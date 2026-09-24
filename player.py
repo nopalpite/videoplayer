@@ -39,6 +39,8 @@ log = logging.getLogger("player")
 SPLASH_CHECK = 10    # s : vérification de l'adresse réseau sur l'écran d'accueil
 SPLASH_INTRO = BASE / "assets" / "intro.mp4"
 SPLASH_LIST = DATA_DIR / "splash.ffconcat"
+SPLASH_NET_WAIT = 30  # s : attente du réseau (Wi-Fi) après l'intro de démarrage
+SPLASH_KEEP = 3       # écrans en cache (ex. sans réseau + Wi-Fi + Ethernet)
 WEB_PORT = 8080
 
 PRESS_LOCKOUT = 0.3  # s : ignore les appuis trop rapprochés (rebonds, double appui)
@@ -143,6 +145,9 @@ class Player:
         self.splash_key = None
         self.splash_jobs = set()     # clés en cours de calcul
         self.intro_played = False    # l'intro vient d'être jouée au démarrage
+        self.splash_waiting = False  # logo tenu à l'écran en attendant le réseau
+        self.splash_deadline = 0.0
+        self.splash_shown = None     # (clé, "anim" | "image") affiché
 
         self.mpv = mpv.MPV(
             vo="gpu", gpu_context="drm", hwdec="v4l2m2m", ao="alsa",
@@ -218,7 +223,13 @@ class Player:
         else:
             self.mpv.sub_border_style = "outline-and-shadow"
 
-        if self.cfg["mode"] == "interactive":
+        if self._needs_setup():
+            # rien de programmé : écran d'accueil, sans passer par un écran noir
+            # (après l'intro de démarrage, son logo reste affiché)
+            if self.intro_played:
+                self.splash_deadline = time.monotonic() + SPLASH_NET_WAIT
+            self._show_splash("boot" if self.intro_played else "enter")
+        elif self.cfg["mode"] == "interactive":
             inter = self.cfg["interactive"]
             gpios = [t["gpio"] for t in inter["triggers"] if t.get("media")]
             try:
@@ -232,9 +243,6 @@ class Player:
             loop = self.cfg["loop"]
             self._play(loop["media"], loop=True, muted=loop["muted"])
             self.state = "loop" if self.current else "idle"
-        if self.state == "idle" and self._needs_setup():
-            # juste après l'intro de démarrage : on enchaîne sur la seule fin
-            self._show_splash(with_intro=not self.intro_played)
         self.intro_played = False
         log.info("configuration chargée : mode=%s", self.cfg["mode"])
 
@@ -303,34 +311,54 @@ class Player:
                            mdns_available(), stamp])
         return hashlib.sha1(data.encode()).hexdigest()[:12]
 
-    def _show_splash(self, with_intro=True):
+    def _show_splash(self, context="enter"):
+        """Affiche l'écran d'accueil.
+
+        context :
+          enter  - on arrive sur l'écran (contenu retiré…) : intro + fin animées
+          boot   - juste après l'intro de démarrage, arrêtée sur le logo centré :
+                   on attend le réseau (logo tenu), puis seule la fin est jouée
+          change - adresse modifiée ou rendu terminé : simple mise à jour de
+                   l'image, jamais d'animation rejouée
+        """
         addresses = network_addresses()
+        self.state = "setup"
+        self.splash_checked = time.monotonic()
+        if context == "boot" and not addresses \
+                and time.monotonic() < self.splash_deadline:
+            self.splash_waiting = True   # la dernière image de l'intro reste
+            return
+        self.splash_waiting = False
+
         key = self._splash_key(addresses)
         self.splash_addresses, self.splash_key = addresses, key
-        self.splash_checked = time.monotonic()
         image = DATA_DIR / f"splash-{key}.png"
         outro = DATA_DIR / f"splash-{key}.mp4"
-
         self.loop_len = None
         self.current_sub = None
         self.mpv["sub-files"] = []
-        self.state = "setup"
-        if outro.exists() and SPLASH_INTRO.exists():
+
+        if context != "change" and outro.exists() and SPLASH_INTRO.exists():
             # intro générique + fin propre à l'adresse, enchaînées sans coupure ;
             # mpv garde ensuite la dernière image (l'écran d'accueil). Après
             # l'intro de démarrage, seule la fin est jouée : elle repart du logo
             # centré sur lequel l'intro s'est arrêtée.
-            files = ([SPLASH_INTRO] if with_intro else []) + [outro]
+            files = ([SPLASH_INTRO] if context == "enter" else []) + [outro]
             SPLASH_LIST.write_text("ffconcat version 1.0\n"
                                    + "".join(f"file '{f}'\n" for f in files))
             self.mpv.demuxer_lavf_o = "safe=0"
             self.mpv.command("loadfile", str(SPLASH_LIST), "replace")
-        else:
+            self.splash_shown = (key, "anim")
+        elif self.splash_shown and self.splash_shown[0] == key:
+            pass    # déjà à l'écran (animation terminée ou image) : rien à faire
+        elif image.exists():
             self.mpv.demuxer_lavf_o = ""
-            if image.exists():
-                self.mpv.command("loadfile", str(image), "replace")
-            else:
-                self.mpv.command("stop")
+            self.mpv.command("loadfile", str(image), "replace")
+            self.splash_shown = (key, "image")
+        elif context == "enter":
+            self.mpv.command("stop")     # écran noir le temps du rendu (~3 s)
+        # sinon (boot, change) : l'image actuelle reste jusqu'au rendu
+        if not (image.exists() and outro.exists()):
             self._build_splash(key, addresses, image, outro)
 
     def _build_splash(self, key, addresses, image, outro):
@@ -348,10 +376,14 @@ class Player:
                                         *args], check=True, timeout=1800,
                                        stdout=subprocess.DEVNULL)
                         self.events.put(("splash_ready", key))
-                # ménage : anciens écrans (autre adresse, ancien rendu)
-                for old in DATA_DIR.glob("splash-*"):
-                    if key not in old.name:
-                        old.unlink(missing_ok=True)
+                # ménage : on garde les écrans les plus récents (le démarrage
+                # passe souvent par « sans réseau » avant d'avoir son adresse)
+                keys = sorted({f.stem for f in DATA_DIR.glob("splash-*.png")},
+                              key=lambda k: (DATA_DIR / f"{k}.png").stat().st_mtime,
+                              reverse=True)
+                for old in keys[SPLASH_KEEP:]:
+                    for f in DATA_DIR.glob(f"{old}.*"):
+                        f.unlink(missing_ok=True)
                 log.info("écran d'accueil animé prêt")
             except (subprocess.SubprocessError, OSError) as e:
                 log.error("rendu de l'écran d'accueil impossible : %s", e)
@@ -362,18 +394,22 @@ class Player:
 
     def _on_splash_ready(self, key):
         if self.state == "setup" and key == self.splash_key:
-            self._show_splash()
+            self._show_splash("change")
 
     def _refresh_splash(self):
         # l'adresse IP peut arriver après le démarrage (DHCP, Wi-Fi) ou changer
         if self.state != "setup":
+            return
+        if self.splash_waiting:          # logo tenu : on vérifie chaque seconde
+            if network_addresses() or time.monotonic() >= self.splash_deadline:
+                self._show_splash("boot")
             return
         if time.monotonic() - self.splash_checked < SPLASH_CHECK:
             return
         self.splash_checked = time.monotonic()
         if network_addresses() != self.splash_addresses:
             log.info("adresse réseau modifiée : écran d'accueil mis à jour")
-            self._show_splash()
+            self._show_splash("change")
 
     def _show_attract(self):
         inter = self.cfg["interactive"]
@@ -384,6 +420,7 @@ class Player:
             self.state = "idle"
 
     def _play(self, media, loop, muted):
+        self.splash_shown = None
         kind = media_kind(media) if media else None
         if kind not in ("video", "image") or not (MEDIA_DIR / media).is_file():
             if media:
