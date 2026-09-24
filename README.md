@@ -18,14 +18,40 @@ Les deux processus dialoguent via le socket unix `data/player.sock`
 
 ## Installation
 
-    sudo apt install mpv python3-mpv python3-flask python3-libgpiod python3-pil \
-        python3-qrcode python3-numpy fonts-inter ffmpeg
-    sudo cp systemd/*.service /etc/systemd/system/
-    sudo systemctl enable --now videoplayer videoplayer-web
+**Prérequis** : Raspberry Pi 3 et une carte SD flashée avec **Raspberry Pi OS
+Lite (64-bit) « Trixie »**. Dans Raspberry Pi Imager, personnalisez l'image :
+nom d'hôte, utilisateur et mot de passe, Wi-Fi (ou prévoir un câble Ethernet)
+et SSH activé. Le code utilise mpv ≥ 0.38 et libgpiod 2, absents de Bookworm.
 
-Testé sur Raspberry Pi 3 (Raspberry Pi OS Trixie Lite, sans bureau, noyau KMS).
-L'utilisateur `pi` doit être dans les groupes `video`, `render`, `audio` et `gpio`.
-Les dossiers `media/` et `data/` sont créés au premier lancement.
+Au premier démarrage, connectez-vous en SSH puis lancez :
+
+    curl -fsSL https://raw.githubusercontent.com/nopalpite/videoplayer/main/install.sh | sudo bash
+
+ou, depuis un dépôt cloné : `sudo ./install.sh`. Redémarrez à la fin : le Pi
+démarre sur l'animation darksign puis sur l'écran d'accueil, sans aucun média,
+sous-titre ni configuration.
+
+L'installateur :
+
+1. vérifie le matériel et la version du système ;
+2. installe les paquets (mpv, ffmpeg, Flask, libgpiod, Pillow, numpy, qrcode,
+   police Inter, avahi pour le nom `.local`) ;
+3. clone le dépôt dans `~/videoplayer` (ou installe sur place s'il est lancé
+   depuis un dépôt cloné) ;
+4. crée `media/` et `data/` vides ;
+5. ajoute l'utilisateur aux groupes `video`, `render`, `audio` et `gpio` ;
+6. installe et active les services `videoplayer` et `videoplayer-web`
+   (générés depuis `systemd/*.service.in`) ;
+7. configure le démarrage silencieux (voir « Démarrage ») et conserve le
+   journal système entre les redémarrages.
+
+Options : `--user NOM`, `--dir CHEMIN`, `--reboot`, `--dry-run` (affiche sans
+rien modifier), `--force` (ignore les vérifications), `--reset` (efface
+médias et configuration, confirmation demandée ou `--yes` sans terminal).
+Voir `./install.sh --help`.
+
+**Mise à jour** : relancer l'installateur. Il récupère la dernière version,
+relance les services et conserve médias et configuration.
 
 Pour tester sans bouton câblé : [gpio-web](https://github.com/nopalpite/gpio-web).
 
@@ -53,7 +79,9 @@ Réglages système correspondants (sauvegardes des originaux :
 - invite de connexion à l'écran désactivée : `sudo systemctl disable getty@tty1`
   (SSH et console série restent disponibles) ;
 - service `videoplayer` sans dépendances par défaut, lancé après
-  `dev-dri-card0.device` (voir `systemd/videoplayer.service`).
+  `dev-dri-card0.device` (voir `systemd/videoplayer.service.in`).
+
+Tous ces réglages sont appliqués par `install.sh`.
 
 ## Écran d'accueil
 
