@@ -17,6 +17,9 @@ VIDEO_EXT = {".mp4", ".m4v", ".mkv", ".mov", ".avi", ".webm", ".mpg", ".mpeg", "
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
 SUBTITLE_EXT = {".srt", ".vtt", ".ass"}
 
+IMAGE_DURATION = 6   # s : affichage par défaut d'une image dans une playlist
+IMAGE_DURATION_MAX = 3600
+
 # taille des sous-titres (pixels mpv, référence 720 lignes)
 SUBTITLE_SIZES = {"small": 36, "medium": 48, "large": 64}
 
@@ -28,10 +31,13 @@ PHYSICAL = {
 }
 
 DEFAULT_CONFIG = {
-    "mode": "loop",                # "loop" | "interactive"
+    "mode": "loop",                # "loop" (playlist) | "interactive"
     "volume": 100,
     "audio_device": "auto",
-    "loop": {"media": None, "muted": False},
+    # playlist : une seule entrée tourne en boucle infinie ; sinon les entrées
+    # s'enchaînent dans l'ordre, chaque vidéo répétée « repeat » fois, chaque
+    # image affichée « duration » secondes
+    "loop": {"items": [], "muted": False},   # [{"media": "a.mp4", "repeat": 1}]
     "interactive": {
         "attract": None,
         "attract_muted": True,
@@ -76,6 +82,10 @@ def load_config():
             cfg[key].update(value)
         else:
             cfg[key] = value
+    # ancien format de la boucle simple : un seul média
+    old = cfg["loop"].pop("media", None)
+    if old and not cfg["loop"]["items"]:
+        cfg["loop"]["items"] = [{"media": old, "repeat": 1}]
     return cfg
 
 

@@ -8,8 +8,9 @@ from flask import Flask, jsonify, render_template, request
 from PIL import Image, ImageOps
 from werkzeug.utils import secure_filename
 
-from common import (MEDIA_DIR, SUBTITLE_SIZES, available_gpios, fps_of,
-                    load_config, media_kind, player_request, save_config)
+from common import (IMAGE_DURATION, IMAGE_DURATION_MAX, MEDIA_DIR,
+                    SUBTITLE_SIZES, available_gpios, fps_of, load_config,
+                    media_kind, player_request, save_config)
 from transcode import INCOMING_DIR, Converter
 
 app = Flask(__name__)
@@ -88,8 +89,8 @@ def list_media():
 
 def media_usage(cfg, name):
     uses = []
-    if cfg["loop"]["media"] == name:
-        uses.append("boucle simple")
+    if any(it["media"] == name for it in cfg["loop"]["items"]):
+        uses.append("playlist")
     if cfg["interactive"]["attract"] == name:
         uses.append("accroche")
     for t in cfg["interactive"]["triggers"]:
@@ -161,6 +162,15 @@ def media_ready(name):
 converter = Converter(on_done=media_ready)
 
 
+def playlist_item(it):
+    """Entrée de playlist nettoyée : répétitions (vidéo) ou durée (image)."""
+    if media_kind(it["media"]) == "image":
+        duration = float(it.get("duration") or IMAGE_DURATION)
+        return {"media": it["media"],
+                "duration": round(max(1, min(IMAGE_DURATION_MAX, duration)), 1)}
+    return {"media": it["media"], "repeat": max(1, min(999, int(it.get("repeat") or 1)))}
+
+
 def validate(cfg):
     errors = []
     media = {m["name"]: m["kind"] for m in list_media()}
@@ -174,11 +184,12 @@ def validate(cfg):
         errors.append("volume invalide")
 
     playable = {n for n, k in media.items() if k in ("video", "image")}
-    loop = cfg["loop"]
-    if loop.get("media") and loop["media"] not in playable:
-        errors.append(f"boucle : média introuvable ({loop['media']})")
-    if cfg["mode"] == "loop" and not loop.get("media"):
-        errors.append("boucle : choisissez un média")
+    items = cfg["loop"]["items"]
+    for it in items:
+        if it["media"] not in playable:
+            errors.append(f"playlist : média introuvable ({it['media']})")
+    if cfg["mode"] == "loop" and not items:
+        errors.append("playlist : ajoutez au moins un média")
 
     inter = cfg["interactive"]
     if inter.get("attract") and inter["attract"] not in playable:
@@ -238,6 +249,11 @@ def api_config():
     if isinstance(body.get("subtitles"), dict):
         # association vidéo -> sous-titres ; une valeur vide retire l'association
         cfg["subtitles"] = {v: s for v, s in body["subtitles"].items() if s}
+    try:
+        cfg["loop"]["items"] = [playlist_item(it)
+                                for it in cfg["loop"]["items"] if it.get("media")]
+    except (TypeError, ValueError, KeyError):
+        return jsonify(errors=["playlist : répétitions ou durée invalide"]), 400
     cfg["interactive"]["triggers"] = [
         {"gpio": int(t["gpio"]), "media": t.get("media")}
         for t in cfg["interactive"]["triggers"]

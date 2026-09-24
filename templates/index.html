@@ -107,6 +107,18 @@
   .subsel { margin-top: 6px; font-size: 12px; color: var(--muted); }
   .subsel select { font-size: 12px; padding: 3px 6px; margin-left: 4px; }
 
+  #playlist td.num { width: 28px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #playlist td.grip { width: 20px; color: var(--muted); cursor: grab; user-select: none; }
+  #playlist tr.dragging td { opacity: .4; }
+  #playlist tr.drop-before td { box-shadow: inset 0 2px 0 var(--accent); }
+  #playlist tr.drop-after td { box-shadow: inset 0 -2px 0 var(--accent); }
+  #playlist select { width: 100%; }
+  .repeat { display: flex; align-items: center; gap: 6px; color: var(--muted);
+            white-space: nowrap; }
+  .repeat input { font: inherit; width: 64px; padding: 5px 6px; border-radius: 6px;
+                  border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .btn.icon { padding: 6px 9px; }
+
   .savebar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 24px;
              background: var(--card); border-top: 1px solid var(--border);
              display: flex; justify-content: flex-end; align-items: center; gap: 16px;
@@ -145,15 +157,19 @@
     <h2>Mode de lecture</h2>
     <div class="alert" id="player-error" hidden></div>
     <div class="seg" id="mode">
-      <button data-mode="loop">Boucle simple</button>
+      <button data-mode="loop">Playlist</button>
       <button data-mode="interactive">Interactif (boutons)</button>
     </div>
 
     <div id="panel-loop">
-      <div class="field">
-        <label for="loop-media">Média en boucle</label>
-        <select id="loop-media"></select>
-      </div>
+      <table>
+        <thead><tr><th></th><th></th><th>Média</th><th>Répétitions / durée</th><th></th></tr></thead>
+        <tbody id="playlist"></tbody>
+      </table>
+      <p style="margin:12px 0 0">
+        <button class="btn" id="add-item">+ Ajouter un média</button>
+      </p>
+      <p class="hint" id="playlist-hint"></p>
       <label class="check"><input type="checkbox" id="loop-sound"> Avec le son</label>
     </div>
 
@@ -272,7 +288,7 @@ function render() {
   $("panel-loop").hidden = cfg.mode !== "loop";
   $("panel-interactive").hidden = cfg.mode !== "interactive";
 
-  fillSelect($("loop-media"), mediaOptions(["video", "image"]), cfg.loop.media, "— choisir —");
+  renderPlaylist();
   $("loop-sound").checked = !cfg.loop.muted;
 
   const it = cfg.interactive;
@@ -298,6 +314,139 @@ function render() {
   renderMedia();
   $("savebar").classList.toggle("show", dirty());
 }
+
+let dragFrom = null;   // index de l'entrée déplacée à la souris
+const IMAGE_DURATION = 6;   // s, comme common.IMAGE_DURATION
+const kindOf = (name) => media.find((m) => m.name === name)?.kind;
+
+function renderPlaylist() {
+  const body = $("playlist");
+  const items = cfg.loop.items;
+  const single = items.length === 1;
+  body.innerHTML = "";
+
+  items.forEach((it, i) => {
+    const tr = document.createElement("tr");
+    const pl = player?.state === "loop" ? player.playlist : null;
+    if (pl ? pl.index === i : player?.state === "loop" && single && player.media === it.media)
+      tr.className = "playing";
+
+    const grip = document.createElement("td");
+    grip.className = "grip";
+    grip.textContent = "⠿";
+    grip.title = "Glisser pour réordonner";
+    const num = document.createElement("td");
+    num.className = "num";
+    num.textContent = `${i + 1}.`;
+
+    const sel = document.createElement("select");
+    fillSelect(sel, mediaOptions(["video", "image"]), it.media);
+    sel.onchange = () => { it.media = sel.value; render(); };
+
+    const rep = document.createElement("label");
+    rep.className = "repeat";
+    if (single) {
+      rep.textContent = "∞ en boucle";
+    } else if (kindOf(it.media) === "image") {
+      // une image n'a pas de fin : elle reste affichée une durée donnée
+      it.duration ??= IMAGE_DURATION;
+      const input = document.createElement("input");
+      input.type = "number"; input.min = 1; input.max = 3600; input.step = "any";
+      input.value = it.duration;
+      input.title = "Durée d'affichage de l'image";
+      input.onchange = () => {
+        it.duration = Math.max(1, Math.min(3600, Math.round(+input.value * 10) / 10 || IMAGE_DURATION));
+        render();
+      };
+      rep.append(input, "s");
+    } else {
+      it.repeat ??= 1;
+      const input = document.createElement("input");
+      input.type = "number"; input.min = 1; input.max = 999;
+      input.value = it.repeat;
+      input.title = "Nombre de lectures d'affilée";
+      input.onchange = () => {
+        it.repeat = Math.max(1, Math.min(999, Math.round(+input.value) || 1));
+        render();
+      };
+      rep.append(input, "×");
+    }
+
+    const move = (to) => {
+      items.splice(to, 0, items.splice(i, 1)[0]);
+      render();
+    };
+    const up = document.createElement("button");
+    up.className = "btn icon"; up.textContent = "↑"; up.title = "Monter";
+    up.disabled = i === 0;
+    up.onclick = () => move(i - 1);
+    const down = document.createElement("button");
+    down.className = "btn icon"; down.textContent = "↓"; down.title = "Descendre";
+    down.disabled = i === items.length - 1;
+    down.onclick = () => move(i + 1);
+    const del = document.createElement("button");
+    del.className = "btn danger"; del.textContent = "Retirer";
+    del.onclick = () => { items.splice(i, 1); render(); };
+
+    const cells = [grip, num];
+    for (const c of [sel, rep, [up, down, del]]) {
+      const td = document.createElement("td");
+      if (Array.isArray(c)) { td.className = "actions"; td.append(...c); } else td.append(c);
+      cells.push(td);
+    }
+    tr.append(...cells);
+
+    // glisser-déposer : on saisit la ligne par la poignée
+    grip.onmousedown = grip.ontouchstart = () => { tr.draggable = true; };
+    tr.ondragstart = (e) => {
+      dragFrom = i; tr.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    };
+    tr.ondragend = () => { tr.draggable = false; dragFrom = null; render(); };
+    const after = (e) => {
+      const r = tr.getBoundingClientRect();
+      return e.clientY > r.top + r.height / 2;
+    };
+    tr.ondragover = (e) => {
+      if (dragFrom === null) return;
+      e.preventDefault();
+      for (const r of body.children) r.classList.remove("drop-before", "drop-after");
+      tr.classList.add(after(e) ? "drop-after" : "drop-before");
+    };
+    tr.ondrop = (e) => {
+      e.preventDefault();
+      if (dragFrom === null) return;
+      let to = i + (after(e) ? 1 : 0);
+      if (dragFrom < to) to--;
+      items.splice(to, 0, items.splice(dragFrom, 1)[0]);
+      dragFrom = null;
+      render();
+    };
+    body.append(tr);
+  });
+
+  if (!items.length) {
+    body.innerHTML = `<tr><td colspan="5" class="empty">Playlist vide.</td></tr>`;
+  }
+  $("add-item").disabled = !mediaOptions(["video", "image"]).length;
+  $("playlist-hint").textContent = !items.length ? ""
+    : single ? "Un seul média : il tourne en boucle sans fin, sans coupure. "
+      + "Ajoutez d'autres médias pour créer une playlist."
+    : "Les médias s'enchaînent dans l'ordre, puis la playlist recommence : chaque vidéo "
+      + "est répétée le nombre de fois indiqué (sans coupure entre deux répétitions), "
+      + "chaque image reste affichée la durée indiquée en secondes.";
+}
+
+$("add-item").onclick = () => {
+  const items = cfg.loop.items;
+  const choices = mediaOptions(["video", "image"]);
+  if (!choices.length) return;
+  // propose de préférence un média pas encore dans la liste
+  const fresh = choices.find(([n]) => !items.some((it) => it.media === n)) || choices[0];
+  items.push(kindOf(fresh[0]) === "image"
+    ? { media: fresh[0], duration: IMAGE_DURATION } : { media: fresh[0], repeat: 1 });
+  render();
+};
 
 function renderTriggers() {
   const body = $("triggers");
@@ -427,7 +576,6 @@ $("mode").onclick = (e) => {
   if (e.target.dataset.mode) { cfg.mode = e.target.dataset.mode; render(); }
 };
 const bind = (id, fn) => $(id).addEventListener("change", (e) => { fn(e.target); render(); });
-bind("loop-media", (el) => cfg.loop.media = el.value || null);
 bind("loop-sound", (el) => cfg.loop.muted = !el.checked);
 bind("attract", (el) => cfg.interactive.attract = el.value || null);
 bind("attract-sound", (el) => cfg.interactive.attract_muted = !el.checked);
@@ -594,7 +742,7 @@ drop.ondrop = (e) => {
 // --- état du lecteur ---------------------------------------------------------
 
 const STATE_LABEL = {
-  loop: "En boucle", attract: "Accroche", triggered: "Vidéo déclenchée",
+  loop: "Playlist", attract: "Accroche", triggered: "Vidéo déclenchée",
   idle: "Écran noir", setup: "Écran d'accueil (rien de programmé)",
   boot: "Démarrage",
 };
@@ -614,9 +762,12 @@ function renderStatus() {
   if (player.media) {
     const b = document.createElement("b");
     b.textContent = player.media + (player.gpio != null ? ` (GPIO${player.gpio})` : "");
+    const pl = player.playlist;
+    if (pl) now.append(` ${pl.index + 1}/${pl.count}`);
     now.append(" : ", b);
+    if (pl && pl.repeat > 1) now.append(` · ${pl.pass}/${pl.repeat}`);
   }
-  const showBar = player.state === "triggered" && player.duration;
+  const showBar = (player.state === "triggered" || player.playlist) && player.duration;
   bar.hidden = !showBar;
   if (showBar) bar.firstChild.style.width = `${(player.position / player.duration) * 100}%`;
 
@@ -640,7 +791,7 @@ async function load() {
 
 async function poll() {
   try {
-    const prev = JSON.stringify([player?.state, player?.media, player?.gpio]);
+    const prev = JSON.stringify([player?.state, player?.media, player?.gpio, player?.playlist?.index]);
     const doneBefore = jobs.filter((j) => j.state === "done").map((j) => j.id).join();
     const data = await (await fetch("/api/status")).json();
     player = data.player;
@@ -650,7 +801,8 @@ async function poll() {
     if (jobs.filter((j) => j.state === "done").map((j) => j.id).join() !== doneBefore) {
       refreshMedia();   // une vidéo convertie vient d'arriver dans la médiathèque
     }
-    if (prev !== JSON.stringify([player?.state, player?.media, player?.gpio])) {
+    if (prev !== JSON.stringify([player?.state, player?.media, player?.gpio, player?.playlist?.index])) {
+      renderPlaylist();
       renderTriggers();
       renderMedia();
     }

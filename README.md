@@ -57,7 +57,12 @@ Pour tester sans bouton câblé : [gpio-web](https://github.com/nopalpite/gpio-w
 
 ## Modes
 
-- **Boucle simple** : un média (vidéo ou image) en boucle, avec ou sans son.
+- **Playlist** : un seul média (vidéo ou image) tourne en boucle sans fin ;
+  plusieurs médias s'enchaînent dans l'ordre choisi (réorganisable), puis la
+  liste recommence. Chaque vidéo est répétée un nombre de fois défini. Les répétitions
+  d'une même vidéo sont sans coupure ; entre deux vidéos différentes, mpv
+  précharge la suivante. Une image reste affichée une durée choisie (6 s par
+  défaut).
 - **Interactif** : une accroche (vidéo ou image) tourne en boucle ; un appui
   sur un bouton lance la vidéo associée, puis retour à l'accroche à la fin.
   Option : un appui peut ou non interrompre la vidéo en cours.

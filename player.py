@@ -2,7 +2,10 @@
 """Lecteur vidéo plein écran piloté par GPIO (mpv + gpiod).
 
 Modes :
-  - loop        : un seul média (vidéo ou image) en boucle, avec ou sans son.
+  - loop        : playlist. Un seul média (vidéo ou image) tourne en boucle ;
+                  plusieurs médias s'enchaînent dans l'ordre (vidéos répétées
+                  un nombre de fois choisi, images affichées une durée
+                  choisie), puis la liste recommence.
   - interactive : un média d'accroche en boucle ; un bouton GPIO lance une
                   vidéo, puis retour à l'accroche quand elle est terminée.
 
@@ -28,7 +31,8 @@ import gpiod
 import mpv
 from gpiod.line import Bias, Direction, Edge
 
-from common import (BASE, DATA_DIR, MEDIA_DIR, SOCKET_PATH, SUBTITLE_SIZES,
+from common import (BASE, DATA_DIR, IMAGE_DURATION, MEDIA_DIR, SOCKET_PATH,
+                    SUBTITLE_SIZES,
                     load_config, mdns_available, media_kind, network_addresses,
                     network_status)
 
@@ -54,6 +58,13 @@ LOOP_LIST = DATA_DIR / "loop.ffconcat"
 LOOP_HOURS = 24
 LOOP_MAX_ENTRIES = 20000
 
+# Playlist de plusieurs vidéos : même principe pour les répétitions d'une
+# vidéo (une liste concat par entrée), mais le passage d'une vidéo à l'autre
+# se fait par la playlist de mpv. Le démultiplexeur concat ne sait pas enchaîner
+# des fichiers différents (résolution, cadence, échantillonnage audio) : les
+# horodatages sautent et le son se désynchronise.
+PLAYLIST_LIST = "playlist-{}.ffconcat"
+
 
 _durations = {}  # (chemin, date de modification) -> durée
 
@@ -78,18 +89,25 @@ def _probe_duration(path):
 
 def write_loop_list(path, duration):
     count = min(LOOP_MAX_ENTRIES, max(2, int(LOOP_HOURS * 3600 / duration)))
+    write_concat(LOOP_LIST, path, duration, count)
+
+
+def write_concat(dest, path, duration, count):
+    """Liste concat qui répète « count » fois la vidéo « path »."""
     # « duration » impose un décalage exact entre deux passages
     quoted = str(path).replace("'", "'\\''")   # échappement ffconcat
-    entry = f"file '{quoted}'\nduration {duration:.6f}\n"
+    entry = f"file '{quoted}'\n"
+    if duration > 0:
+        entry += f"duration {duration:.6f}\n"
     content = "ffconcat version 1.0\n" + entry * count
     try:
-        if LOOP_LIST.read_text() == content:
-            return   # même vidéo : inutile de réécrire la carte SD
+        if dest.read_text() == content:
+            return   # même contenu : inutile de réécrire la carte SD
     except FileNotFoundError:
         pass
-    tmp = LOOP_LIST.with_suffix(".tmp")
+    tmp = dest.with_suffix(".tmp")
     tmp.write_text(content)
-    os.replace(tmp, LOOP_LIST)
+    os.replace(tmp, dest)
 
 
 class GpioWatcher:
@@ -138,6 +156,9 @@ class Player:
         self.current_gpio = None   # broche ayant lancé la vidéo en cours
         self.loop_len = None       # durée d'un passage en boucle continue
         self.loop_index = 0        # numéro du passage en cours (sous-titres)
+        self.playlist = []         # entrées de la playlist (plusieurs vidéos)
+        self.playlist_pos = None   # entrée en cours de lecture
+        self.entry_started = 0.0   # début d'affichage de l'entrée (images)
         self.last_press = 0.0
         self.last_error = None
         self.watcher = None
@@ -162,6 +183,8 @@ class Player:
             # ensuite (accroche après l'intro ou une vidéo) resterait figé
             fullscreen=True, keep_open="yes", keep_open_pause="no",
             idle="yes", force_window="yes",
+            # playlist : le fichier suivant est ouvert avant la fin du précédent
+            prefetch_playlist="yes",
             image_display_duration="inf", background_color="#000000",
             osc=False, osd_level=0, input_default_bindings=False,
             sub_font="DejaVu Sans", sub_margin_y=50, sub_auto="no",
@@ -176,6 +199,10 @@ class Player:
             data = getattr(event, "data", None)
             if getattr(data, "reason", None) == mpv.MpvEventEndFile.ERROR:
                 self.events.put(("error",))
+
+        @self.mpv.event_callback("file-loaded")
+        def _file_loaded(_event):
+            self.events.put(("file_loaded",))
 
     @staticmethod
     def _mpv_log(level, component, message):
@@ -242,7 +269,7 @@ class Player:
             self._show_attract()
         else:
             loop = self.cfg["loop"]
-            self._play(loop["media"], loop=True, muted=loop["muted"])
+            self._play_playlist(loop["items"], muted=loop["muted"])
             self.state = "loop" if self.current else "idle"
         self.intro_played = False
         log.info("configuration chargée : mode=%s", self.cfg["mode"])
@@ -272,6 +299,26 @@ class Player:
         elif self.state == "triggered":
             self._show_attract()
 
+    def _on_file_loaded(self):
+        # playlist : nouvelle entrée (ou retour au début de la liste)
+        if self.state != "loop" or not self.playlist:
+            return
+        pos = self.mpv.playlist_pos
+        if pos is None or not 0 <= pos < len(self.playlist):
+            return
+        entry = self.playlist[pos]
+        self.playlist_pos = pos
+        self.entry_started = time.monotonic()
+        self.current = entry["media"]
+        self.loop_len = entry["duration"] or None
+        self.loop_index = 0
+        self.mpv.sub_delay = 0
+        sub = self.cfg["subtitles"].get(entry["media"])
+        self.current_sub = None
+        if sub and (MEDIA_DIR / sub).is_file():
+            self.mpv.command("sub-add", str(MEDIA_DIR / sub), "select")
+            self.current_sub = sub
+
     def _on_loop_pass(self, index):
         # boucle continue : les horodatages ne reviennent pas à zéro, on décale
         # donc les sous-titres d'un passage à chaque tour
@@ -298,7 +345,8 @@ class Player:
         voulu (option « écran noir » de l'interface).
         """
         if self.cfg["mode"] == "loop":
-            return not self._playable(self.cfg["loop"]["media"])
+            return not any(self._playable(it.get("media"))
+                           for it in self.cfg["loop"]["items"])
         inter = self.cfg["interactive"]
         return not self._playable(inter["attract"]) and not any(
             self._playable(t.get("media")) for t in inter["triggers"])
@@ -340,6 +388,8 @@ class Player:
         outro = DATA_DIR / f"splash-{key}.mp4"
         self.loop_len = None
         self.current_sub = None
+        self.playlist = []
+        self.mpv.loop_playlist = "no"
         self.mpv["sub-files"] = []
 
         if context != "change" and outro.exists() and SPLASH_INTRO.exists():
@@ -427,8 +477,67 @@ class Player:
         else:
             self.state = "idle"
 
+    def _play_playlist(self, items, muted):
+        """Mode playlist : une entrée en boucle infinie, ou plusieurs médias
+        enchaînés (vidéo répétée « repeat » fois, image affichée « duration »
+        secondes) puis la liste recommence."""
+        playable = []
+        for it in items:
+            if self._playable(it.get("media")):
+                playable.append(it)
+            elif it.get("media"):
+                self.last_error = f"média introuvable : {it['media']}"
+                log.error(self.last_error)
+        if len(playable) < 2:
+            # une seule entrée : boucle infinie, sans coupure
+            return self._play(playable[0]["media"] if playable else None,
+                              loop=True, muted=muted)
+
+        self.splash_shown = None
+        self.playlist = []
+        targets = []   # (fichier à charger, options propres à l'entrée)
+        for i, it in enumerate(playable):
+            path = MEDIA_DIR / it["media"]
+            if media_kind(it["media"]) == "image":
+                duration = float(it.get("duration") or IMAGE_DURATION)
+                targets.append((path, f"image-display-duration={duration:g}"))
+                repeat = 1
+            else:
+                duration = media_duration(path)
+                repeat = max(1, int(it.get("repeat") or 1))
+                dest = DATA_DIR / PLAYLIST_LIST.format(i)
+                write_concat(dest, path, duration, repeat)
+                targets.append((dest, "image-display-duration=inf"))
+            self.playlist.append({"media": it["media"], "duration": duration,
+                                  "repeat": repeat})
+        for old in DATA_DIR.glob(PLAYLIST_LIST.format("*")):
+            if all(old != t for t, _ in targets):
+                old.unlink(missing_ok=True)
+
+        self.mpv.mute = bool(muted)
+        self.mpv["sub-files"] = []   # sous-titres ajoutés à chaque entrée
+        self.mpv.sub_delay = 0
+        self.loop_index = 0
+        self.loop_len = None
+        self.current_sub = None
+        self.playlist_pos = None
+        self.mpv.demuxer_lavf_o = "safe=0"
+        # la playlist de mpv est remplacée par la première commande : l'option
+        # de boucle ne s'applique donc qu'aux nouvelles entrées
+        for i, (target, opts) in enumerate(targets):
+            self.mpv.command("loadfile", str(target), "append" if i else "replace",
+                             "-1", f"loop-file=no,{opts}")
+        self.mpv.loop_playlist = "inf"
+        self.current = playable[0]["media"]
+        return True
+
     def _play(self, media, loop, muted):
         self.splash_shown = None
+        self.playlist = []
+        self.playlist_pos = None
+        # avant le chargement : un seul fichier dans la liste de mpv, qui ne
+        # doit pas reboucler (vidéo déclenchée) après une playlist
+        self.mpv.loop_playlist = "no"
         kind = media_kind(media) if media else None
         if kind not in ("video", "image") or not (MEDIA_DIR / media).is_file():
             if media:
@@ -500,12 +609,26 @@ class Player:
             duration = self.mpv.duration
         except Exception:
             devices, position, duration = [], None, None
+        playlist = None
+        if self.state == "loop" and self.playlist and self.playlist_pos is not None:
+            entry = self.playlist[self.playlist_pos]
+            length = entry["duration"]
+            if media_kind(entry["media"]) == "image":
+                # mpv n'avance pas la position d'une image affichée
+                position = min(length, time.monotonic() - self.entry_started)
+            done = int(position // length) if length and position else 0
+            playlist = {"index": self.playlist_pos, "count": len(self.playlist),
+                        "pass": min(done, entry["repeat"] - 1) + 1,
+                        "repeat": entry["repeat"]}
+            if length and position is not None:
+                position, duration = position - done * length, length
         return {
             "state": self.state,
             "mode": self.cfg["mode"] if self.cfg else None,
             "media": self.current,
             "subtitles": self.current_sub,
             "gpio": self.current_gpio,
+            "playlist": playlist,
             "position": position,
             "duration": duration,
             "watched_gpios": self.watcher.gpios if self.watcher else [],
