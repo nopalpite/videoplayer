@@ -9,9 +9,12 @@
 # Options :
 #   --user NOM    utilisateur qui fait tourner le lecteur (défaut : celui qui
 #                 lance sudo, sinon « pi »)
-#   --dir CHEMIN  dossier d'installation (défaut : ~NOM/videoplayer)
+#   --dir CHEMIN  dossier d'installation (défaut : le dossier du script s'il est
+#                 lancé depuis un dépôt cloné, sinon ~NOM/videoplayer)
 #   --reset       efface médias, sous-titres et configuration d'une
-#                 installation existante (retour à l'état « premier démarrage »)
+#                 installation existante (retour à l'état « premier démarrage ») ;
+#                 demande confirmation, ou exige --yes sans terminal
+#   --yes         confirme --reset sans poser la question
 #   --reboot      redémarre à la fin sans demander
 #   --dry-run     affiche ce qui serait fait, sans rien modifier
 #   --force       ignore les vérifications de matériel et de version
@@ -32,7 +35,7 @@ BACKUP_SUFFIX=".avant-darksign"
 
 TARGET_USER="${SUDO_USER:-}"
 INSTALL_DIR=""
-RESET=0; REBOOT=0; DRY_RUN=0; FORCE=0
+RESET=0; REBOOT=0; DRY_RUN=0; FORCE=0; YES=0
 
 # --- affichage -----------------------------------------------------------------
 if [ -t 1 ]; then B=$'\e[1m'; A=$'\e[33m'; R=$'\e[31m'; G=$'\e[32m'; N=$'\e[0m'
@@ -59,7 +62,8 @@ while [ $# -gt 0 ]; do
         --reboot) REBOOT=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --force) FORCE=1; shift ;;
-        -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null \
+        --yes) YES=1; shift ;;
+        -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null \
                    | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "option inconnue : $1 (voir --help)" ;;
     esac
@@ -75,7 +79,13 @@ TARGET_USER="${TARGET_USER:-pi}"
 id "$TARGET_USER" >/dev/null 2>&1 || die "l'utilisateur « $TARGET_USER » n'existe pas."
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-INSTALL_DIR="${INSTALL_DIR:-$TARGET_HOME/videoplayer}"
+SRC_DIR=""     # dépôt d'où le script est lancé (vide avec curl | bash)
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    candidate="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    [ -f "$candidate/player.py" ] && SRC_DIR="$candidate"
+fi
+# lancé depuis un dépôt : on installe sur place, jamais ailleurs par défaut
+INSTALL_DIR="$(realpath -m "${INSTALL_DIR:-${SRC_DIR:-$TARGET_HOME/videoplayer}}")"
 info "utilisateur : $TARGET_USER    dossier : $INSTALL_DIR"
 
 model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
@@ -109,12 +119,7 @@ info "installés : ${PACKAGES[*]}"
 
 # --- 3. code ---------------------------------------------------------------------
 title "Code du lecteur"
-SRC_DIR=""
-if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
-    candidate="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    [ -f "$candidate/player.py" ] && SRC_DIR="$candidate"
-fi
-if [ -n "$SRC_DIR" ] && [ "$SRC_DIR" = "$(realpath -m "$INSTALL_DIR")" ]; then
+if [ -n "$SRC_DIR" ] && [ "$SRC_DIR" = "$INSTALL_DIR" ]; then
     info "installation sur place : $INSTALL_DIR"
 elif [ -n "$SRC_DIR" ]; then
     # copie du dépôt local (modifications comprises), jamais les médias ni l'état
@@ -138,14 +143,17 @@ fi
 title "Médias et configuration"
 if [ "$RESET" = 1 ] && { [ -d "$INSTALL_DIR/media" ] || [ -d "$INSTALL_DIR/data" ]; }; then
     count=$(find "$INSTALL_DIR/media" -maxdepth 1 -type f 2>/dev/null | wc -l)
-    warn "--reset : $count fichier(s) de médias et la configuration vont être effacés."
-    # sans terminal, --reset explicite vaut confirmation
-    if [ "$DRY_RUN" = 1 ] || ! has_tty || confirm "Confirmer l'effacement ?"; then
-        run systemctl stop videoplayer videoplayer-web 2>/dev/null || true
-        run rm -rf "$INSTALL_DIR/media" "$INSTALL_DIR/data"
-    else
+    warn "--reset : effacement de $count fichier(s) de médias et de la configuration"
+    warn "dossier visé : ${B}$INSTALL_DIR${N}"
+    if [ "$DRY_RUN" = 1 ] || [ "$YES" = 1 ]; then
+        :
+    elif ! has_tty; then
+        die "--reset sans terminal pour confirmer : ajoutez --yes pour effacer $INSTALL_DIR."
+    elif ! confirm "Effacer les médias et la configuration de $INSTALL_DIR ?"; then
         die "effacement annulé."
     fi
+    run systemctl stop videoplayer videoplayer-web 2>/dev/null || true
+    run rm -rf "$INSTALL_DIR/media" "$INSTALL_DIR/data"
 fi
 if [ -d "$INSTALL_DIR/media" ] && [ -n "$(ls -A "$INSTALL_DIR/media" 2>/dev/null)" ]; then
     info "installation existante : médias et configuration conservés (--reset pour repartir de zéro)"
