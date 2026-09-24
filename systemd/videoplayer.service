@@ -1,7 +1,13 @@
 [Unit]
 StartLimitIntervalSec=0
 Description=Lecteur vidéo plein écran piloté par GPIO (mpv)
-After=systemd-user-sessions.service sound.target
+# Démarrage au plus tôt, sans attendre le réseau ni la fin du démarrage :
+# l'intro DarkSign s'affiche dès que la carte graphique est prête.
+DefaultDependencies=no
+Wants=dev-dri-card0.device
+After=local-fs.target dev-dri-card0.device
+Conflicts=shutdown.target
+Before=shutdown.target
 
 [Service]
 User=pi

@@ -36,6 +36,25 @@ Pour tester sans bouton câblé : [gpio-web](https://github.com/nopalpite/gpio-w
   sur un bouton lance la vidéo associée, puis retour à l'accroche à la fin.
   Option : un appui peut ou non interrompre la vidéo en cours.
 
+## Démarrage
+
+Au démarrage, l'écran reste noir (ni arc-en-ciel, ni texte, ni logo, ni
+invite de connexion), puis l'intro DarkSign (`assets/intro.mp4`) est jouée dès
+que la carte graphique est prête, sans attendre le réseau. Ensuite, le lecteur
+enchaîne sur le contenu programmé, ou sur le tutoriel si rien ne l'est.
+
+Réglages système correspondants (sauvegardes des originaux :
+`/boot/firmware/*.avant-darksign`) :
+
+- `cmdline.txt` : `console=tty3` au lieu de `console=tty1`, et
+  `quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0
+  systemd.show_status=false rd.udev.log_level=3 udev.log_level=3` ;
+- `config.txt` : `disable_splash=1` ;
+- invite de connexion à l'écran désactivée : `sudo systemctl disable getty@tty1`
+  (SSH et console série restent disponibles) ;
+- service `videoplayer` sans dépendances par défaut, lancé après
+  `dev-dri-card0.device` (voir `systemd/videoplayer.service`).
+
 ## Écran d'accueil
 
 Tant qu'aucun contenu n'est programmé (premier lancement, ou média

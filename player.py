@@ -129,7 +129,7 @@ class Player:
     def __init__(self):
         self.events = queue.Queue()
         self.cfg = None
-        self.state = "idle"        # idle | setup | loop | attract | triggered
+        self.state = "idle"        # boot | idle | setup | loop | attract | triggered
         self.current = None        # nom du média affiché
         self.current_sub = None    # sous-titres associés au média affiché
         self.current_gpio = None   # broche ayant lancé la vidéo en cours
@@ -142,6 +142,7 @@ class Player:
         self.splash_checked = 0.0
         self.splash_key = None
         self.splash_jobs = set()     # clés en cours de calcul
+        self.intro_played = False    # l'intro vient d'être jouée au démarrage
 
         self.mpv = mpv.MPV(
             vo="gpu", gpu_context="drm", hwdec="v4l2m2m", ao="alsa",
@@ -174,7 +175,15 @@ class Player:
     # --- boucle principale : toutes les transitions passent par ici ---------
 
     def run(self):
-        self.events.put(("reload",))
+        if SPLASH_INTRO.exists():
+            # séquence de démarrage : l'intro DarkSign, puis le contenu (ou le
+            # tutoriel si rien n'est programmé) quand elle se termine
+            self.state = "boot"
+            self.mpv.loop_file = "no"
+            self.mpv.command("loadfile", str(SPLASH_INTRO), "replace")
+            log.info("intro de démarrage")
+        else:
+            self.events.put(("reload",))
         while True:
             try:
                 ev, *args = self.events.get(timeout=1)
@@ -221,7 +230,9 @@ class Player:
             self._play(loop["media"], loop=True, muted=loop["muted"])
             self.state = "loop" if self.current else "idle"
         if self.state == "idle" and self._needs_setup():
-            self._show_splash()
+            # juste après l'intro de démarrage : on enchaîne sur la seule fin
+            self._show_splash(with_intro=not self.intro_played)
+        self.intro_played = False
         log.info("configuration chargée : mode=%s", self.cfg["mode"])
 
     def _on_button(self, gpio):
@@ -241,8 +252,12 @@ class Player:
             self.current_gpio = gpio
 
     def _on_eof(self):
-        # vérifie que la fin concerne bien la vidéo déclenchée en cours
-        if self.state == "triggered" and self.mpv.eof_reached:
+        if not self.mpv.eof_reached:
+            return   # fin d'un fichier déjà remplacé
+        if self.state == "boot":
+            self.intro_played = True
+            self._on_reload()
+        elif self.state == "triggered":
             self._show_attract()
 
     def _on_loop_pass(self, index):
@@ -285,7 +300,7 @@ class Player:
                            mdns_available(), stamp])
         return hashlib.sha1(data.encode()).hexdigest()[:12]
 
-    def _show_splash(self):
+    def _show_splash(self, with_intro=True):
         addresses = network_addresses()
         key = self._splash_key(addresses)
         self.splash_addresses, self.splash_key = addresses, key
@@ -300,9 +315,12 @@ class Player:
         self.state = "setup"
         if outro.exists() and SPLASH_INTRO.exists():
             # intro générique + fin propre à l'adresse, enchaînées sans coupure ;
-            # mpv garde ensuite la dernière image (l'écran d'accueil)
-            SPLASH_LIST.write_text(f"ffconcat version 1.0\nfile '{SPLASH_INTRO}'\n"
-                                   f"file '{outro}'\n")
+            # mpv garde ensuite la dernière image (l'écran d'accueil). Après
+            # l'intro de démarrage, seule la fin est jouée : elle repart du logo
+            # centré sur lequel l'intro s'est arrêtée.
+            files = ([SPLASH_INTRO] if with_intro else []) + [outro]
+            SPLASH_LIST.write_text("ffconcat version 1.0\n"
+                                   + "".join(f"file '{f}'\n" for f in files))
             self.mpv.demuxer_lavf_o = "safe=0"
             self.mpv.command("loadfile", str(SPLASH_LIST), "replace")
         else:
