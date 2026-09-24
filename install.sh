@@ -122,11 +122,12 @@ title "Code du lecteur"
 if [ -n "$SRC_DIR" ] && [ "$SRC_DIR" = "$INSTALL_DIR" ]; then
     info "installation sur place : $INSTALL_DIR"
 elif [ -n "$SRC_DIR" ]; then
-    # copie du dépôt local (modifications comprises), jamais les médias ni l'état
+    # copie du code du dépôt local (modifications comprises) : jamais les
+    # médias, l'état ni l'historique git (qui écraserait celui de la cible)
     info "copie de $SRC_DIR vers $INSTALL_DIR"
     run mkdir -p "$INSTALL_DIR"
-    run rsync -a --exclude media/ --exclude data/ --exclude __pycache__/ \
-        "$SRC_DIR/" "$INSTALL_DIR/"
+    run rsync -a --exclude .git/ --exclude media/ --exclude data/ \
+        --exclude __pycache__/ "$SRC_DIR/" "$INSTALL_DIR/"
 elif [ -d "$INSTALL_DIR/.git" ]; then
     info "mise à jour du dépôt existant"
     run sudo -u "$TARGET_USER" git -C "$INSTALL_DIR" pull --ff-only
