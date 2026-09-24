@@ -151,7 +151,11 @@ class Player:
             # par le pilote vc4 et l'écran reste noir.
             drm_drmprime_video_plane="primary", drm_draw_plane="overlay",
             log_handler=self._mpv_log, loglevel="error",
-            fullscreen=True, keep_open="yes", idle="yes", force_window="yes",
+            # keep-open garde la dernière image à la fin d'un fichier ; sans
+            # keep-open-pause=no, mpv se met aussi en pause et le fichier chargé
+            # ensuite (accroche après l'intro ou une vidéo) resterait figé
+            fullscreen=True, keep_open="yes", keep_open_pause="no",
+            idle="yes", force_window="yes",
             image_display_duration="inf", background_color="#000000",
             osc=False, osd_level=0, input_default_bindings=False,
             sub_font="DejaVu Sans", sub_margin_y=50, sub_auto="no",
