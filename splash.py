@@ -165,7 +165,7 @@ def info_layer(addresses, port):
         y += 74
 
     steps = ["Envoyez vos vidéos et images dans la médiathèque",
-             "Choisissez le mode : boucle simple ou interactif (boutons)",
+             "Choisissez le mode : playlist ou interactif (boutons)",
              "Enregistrez : la lecture démarre sur cet écran"]
     step_font = font("Inter-Regular.otf", 30)
     num_font = font("Inter-SemiBold.otf", 25)

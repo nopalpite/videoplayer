@@ -48,6 +48,13 @@ SPLASH_NET_WAIT = 30  # s : attente du réseau (Wi-Fi) après l'intro de démarr
 SPLASH_KEEP = 3       # écrans en cache (ex. sans réseau + Wi-Fi + Ethernet)
 WEB_PORT = 8080
 
+# Image fixe : mpv ne la rend qu'une fois, et ce rendu reste dans la file
+# d'images du GPU (swapchain, 3 images) sans être présenté : l'écran garde
+# l'image précédente. On force quelques rendus imperceptibles (zoom infime)
+# pour vider la file.
+STILL_REDRAWS = 4
+STILL_REDRAW_DELAY = 0.25   # s
+
 PRESS_LOCKOUT = 0.3  # s : ignore les appuis trop rapprochés (rebonds, double appui)
 
 # Boucle sans coupure : au lieu de revenir au début du fichier (loop-file de
@@ -300,6 +307,8 @@ class Player:
             self._show_attract()
 
     def _on_file_loaded(self):
+        if media_kind(self.mpv.path or "") == "image":
+            self._flush_still_image()
         # playlist : nouvelle entrée (ou retour au début de la liste)
         if self.state != "loop" or not self.playlist:
             return
@@ -318,6 +327,17 @@ class Player:
         if sub and (MEDIA_DIR / sub).is_file():
             self.mpv.command("sub-add", str(MEDIA_DIR / sub), "select")
             self.current_sub = sub
+
+    def _flush_still_image(self):
+        def run():
+            for i in range(STILL_REDRAWS):
+                time.sleep(STILL_REDRAW_DELAY)
+                try:   # chaque changement provoque un nouveau rendu ; on finit à 0
+                    self.mpv.video_zoom = 0.0001 if i % 2 == 0 else 0
+                except Exception:
+                    return   # lecteur en cours d'arrêt
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _on_loop_pass(self, index):
         # boucle continue : les horodatages ne reviennent pas à zéro, on décale
