@@ -17,6 +17,10 @@ VIDEO_EXT = {".mp4", ".m4v", ".mkv", ".mov", ".avi", ".webm", ".mpg", ".mpeg", "
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
 SUBTITLE_EXT = {".srt", ".vtt", ".ass"}
 
+# messages UDP réservés, valables dans tous les modes
+UDP_COMMANDS = {"pause": "pause", "play": "reprise", "restart": "relance"}
+UDP_MAX_LEN = 64
+
 IMAGE_DURATION = 6   # s : affichage par défaut d'une image dans une playlist
 IMAGE_DURATION_MAX = 3600
 
@@ -34,6 +38,7 @@ DEFAULT_CONFIG = {
     "mode": "loop",                # "loop" (playlist) | "interactive"
     "volume": 100,
     "audio_device": "auto",
+    "udp_port": 5000,              # messages UDP : boutons et commandes
     # playlist : une seule entrée tourne en boucle infinie ; sinon les entrées
     # s'enchaînent dans l'ordre, chaque vidéo répétée « repeat » fois, chaque
     # image affichée « duration » secondes
@@ -44,11 +49,27 @@ DEFAULT_CONFIG = {
         "triggers_muted": False,
         "interruptible": True,
         "active_low": True,        # bouton relié à GND, pull-up interne
-        "triggers": [],            # [{"gpio": 17, "media": "video.mp4"}]
+        # déclencheurs : broche GPIO et/ou message UDP -> vidéo
+        "triggers": [],            # [{"gpio": 17, "udp": "intro", "media": "video.mp4"}]
     },
     "subtitles": {},               # {"video.mp4": "video.srt"}
     "subtitle_style": {"size": "medium", "background": True},
 }
+
+
+def trigger_label(t):
+    """Nom lisible d'un déclencheur : « GPIO17 », « UDP intro » ou les deux."""
+    parts = []
+    if t.get("gpio") is not None:
+        parts.append(f"GPIO{t['gpio']}")
+    if t.get("udp"):
+        parts.append(f"UDP « {t['udp']} »")
+    return " / ".join(parts) or "déclencheur vide"
+
+
+def udp_key(message):
+    """Forme comparable d'un message UDP : sans espaces autour ni majuscules."""
+    return (message or "").strip().lower()
 
 
 def media_kind(name):

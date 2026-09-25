@@ -143,6 +143,10 @@
   .savebar.show { transform: none; }
   .errors { color: var(--err); font-size: 13px; flex: 1; }
   .transport { display: flex; gap: 6px; }
+  input.text { font: inherit; padding: 6px 8px; border-radius: 6px; width: 100%;
+               border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  code { font: 12px ui-monospace, monospace; background: var(--soft);
+         padding: 1px 5px; border-radius: 4px; }
   .system { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
            background: var(--text); color: var(--bg); padding: 8px 16px;
@@ -212,7 +216,9 @@
         Un appui interrompt la vidéo en cours</label>
       <p class="hint" id="interruptible-hint"></p>
 
-      <h3>Boutons</h3>
+      <h3>Déclencheurs</h3>
+      <p class="hint" style="margin:0 0 12px">Chaque vidéo se lance par un bouton câblé
+        sur une GPIO, par un message UDP, ou les deux.</p>
       <div class="field">
         <label for="wiring">Câblage</label>
         <select id="wiring">
@@ -221,11 +227,11 @@
         </select>
       </div>
       <table>
-        <thead><tr><th>Entrée</th><th>Vidéo lancée</th><th></th></tr></thead>
+        <thead><tr><th>Bouton GPIO</th><th>Message UDP</th><th>Vidéo lancée</th><th></th></tr></thead>
         <tbody id="triggers"></tbody>
       </table>
       <p style="margin:12px 0 0">
-        <button class="btn" id="add-trigger">+ Ajouter un bouton</button>
+        <button class="btn" id="add-trigger">+ Ajouter un déclencheur</button>
       </p>
     </div>
 
@@ -238,6 +244,17 @@
       <label for="audio-device">Sortie audio</label>
       <select id="audio-device"></select>
     </div>
+
+    <h3>Commandes UDP</h3>
+    <div class="field">
+      <label for="udp-port">Port d'écoute</label>
+      <input type="number" class="text" id="udp-port" min="1024" max="65535" style="width:110px">
+    </div>
+    <p class="hint">Messages texte, sans tenir compte des majuscules :
+      ceux des déclencheurs (mode interactif), plus <b>pause</b>, <b>play</b> et
+      <b>restart</b> dans tous les modes. Exemple :
+      <code id="udp-example"></code></p>
+    <p class="hint" id="udp-last"></p>
 
     <h3>Sous-titres</h3>
     <div class="field">
@@ -338,6 +355,7 @@ function render() {
     : "Pendant une vidéo, les appuis sont ignorés jusqu'au retour à l'accroche.";
   $("wiring").value = it.active_low ? "low" : "high";
   renderTriggers();
+  renderUdp();
 
   $("volume").value = cfg.volume;
   $("volume-val").textContent = `(${cfg.volume} %)`;
@@ -490,19 +508,24 @@ function renderTriggers() {
   body.innerHTML = "";
   const used = cfg.interactive.triggers.map((t) => t.gpio);
   const videos = mediaOptions(["video"]);
-  const savedGpios = saved.mode === "interactive"
-    ? saved.interactive.triggers.map((t) => t.gpio) : [];
 
   cfg.interactive.triggers.forEach((t, i) => {
     const tr = document.createElement("tr");
-    if (player?.state === "triggered" && player.gpio === t.gpio) tr.className = "playing";
+    if (player?.state === "triggered" && player.trigger === i) tr.className = "playing";
 
     const gpioSel = document.createElement("select");
     const choices = gpios
       .filter((g) => g.gpio === t.gpio || !used.includes(g.gpio))
       .map((g) => [String(g.gpio), `GPIO${g.gpio} · broche ${g.pin}`]);
-    fillSelect(gpioSel, choices, String(t.gpio));
-    gpioSel.onchange = () => { t.gpio = +gpioSel.value; render(); };
+    fillSelect(gpioSel, choices, t.gpio == null ? "" : String(t.gpio), "— aucune —");
+    gpioSel.onchange = () => { t.gpio = gpioSel.value === "" ? null : +gpioSel.value; render(); };
+
+    const udp = document.createElement("input");
+    udp.className = "text";
+    udp.placeholder = "— aucun —";
+    udp.maxLength = 64;
+    udp.value = t.udp || "";
+    udp.onchange = () => { t.udp = udp.value.trim() || null; render(); };
 
     const mediaSel = document.createElement("select");
     fillSelect(mediaSel, videos, t.media, "— choisir une vidéo —");
@@ -511,16 +534,26 @@ function renderTriggers() {
     const test = document.createElement("button");
     test.className = "btn";
     test.textContent = "Tester";
-    test.title = "Simule un appui (configuration enregistrée)";
-    test.disabled = dirty() || !savedGpios.includes(t.gpio);
-    test.onclick = () => fetch(`/api/trigger/${t.gpio}`, { method: "POST" });
+    test.title = t.udp && t.gpio == null
+      ? "Envoie le message UDP au lecteur (configuration enregistrée)"
+      : "Simule un appui (configuration enregistrée)";
+    test.disabled = dirty() || saved.mode !== "interactive" || !t.media;
+    test.onclick = async () => {
+      const r = t.gpio != null
+        ? await fetch(`/api/trigger/${t.gpio}`, { method: "POST" })
+        : await fetch("/api/trigger-udp", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: t.udp }),
+          });
+      if (!r.ok) toast((await r.json()).error);
+    };
 
     const del = document.createElement("button");
     del.className = "btn danger";
     del.textContent = "Retirer";
     del.onclick = () => { cfg.interactive.triggers.splice(i, 1); render(); };
 
-    const cells = [gpioSel, mediaSel, [test, del]];
+    const cells = [gpioSel, udp, mediaSel, [test, del]];
     for (const c of cells) {
       const td = document.createElement("td");
       if (Array.isArray(c)) { td.className = "actions"; td.append(...c); } else td.append(c);
@@ -530,9 +563,29 @@ function renderTriggers() {
   });
 
   if (!cfg.interactive.triggers.length) {
-    body.innerHTML = `<tr><td colspan="3" class="empty">Aucun bouton configuré.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="4" class="empty">Aucun déclencheur configuré.</td></tr>`;
   }
-  $("add-trigger").disabled = !gpios.some((g) => !used.includes(g.gpio));
+}
+
+function renderUdp() {
+  $("udp-port").value = cfg.udp_port;
+  const host = location.hostname || "<adresse-du-pi>";
+  $("udp-example").textContent = `echo -n pause | nc -u -w1 ${host} ${cfg.udp_port}`;
+  renderUdpStatus();
+}
+
+function renderUdpStatus() {
+  const udp = player?.udp;
+  const box = $("udp-last");
+  if (udp?.error) {
+    box.textContent = "⚠ " + udp.error;
+  } else if (udp?.last) {
+    const when = new Date(udp.last.time * 1000).toLocaleTimeString();
+    box.textContent = `Dernier message : « ${udp.last.message} » de ${udp.last.from} `
+      + `à ${when} → ${udp.last.action}`;
+  } else {
+    box.textContent = udp?.port ? `En écoute sur le port ${udp.port}, aucun message reçu.` : "";
+  }
 }
 
 function subtitleSelect(video) {
@@ -627,9 +680,10 @@ $("volume").oninput = (e) => { cfg.volume = +e.target.value; render(); };
 $("add-trigger").onclick = () => {
   const used = cfg.interactive.triggers.map((t) => t.gpio);
   const free = gpios.find((g) => !used.includes(g.gpio));
-  if (free) cfg.interactive.triggers.push({ gpio: free.gpio, media: null });
+  cfg.interactive.triggers.push({ gpio: free ? free.gpio : null, udp: null, media: null });
   render();
 };
+$("udp-port").onchange = (e) => { cfg.udp_port = +e.target.value; render(); };
 
 $("cancel").onclick = () => { cfg = clone(saved); $("errors").textContent = ""; render(); };
 
@@ -799,7 +853,7 @@ function renderStatus() {
   now.append(STATE_LABEL[player.state] || player.state);
   if (player.media) {
     const b = document.createElement("b");
-    b.textContent = player.media + (player.gpio != null ? ` (GPIO${player.gpio})` : "");
+    b.textContent = player.media + (player.source ? ` (${player.source})` : "");
     const pl = player.playlist;
     if (pl) now.append(` ${pl.index + 1}/${pl.count}`);
     now.append(" : ", b);
@@ -836,7 +890,7 @@ async function load() {
 async function poll() {
   try {
     const offline = !player;
-    const prev = JSON.stringify([player?.state, player?.media, player?.gpio, player?.playlist?.index]);
+    const prev = JSON.stringify([player?.state, player?.media, player?.trigger, player?.playlist?.index]);
     const doneBefore = jobs.filter((j) => j.state === "done").map((j) => j.id).join();
     const data = await (await fetch("/api/status")).json();
     player = data.player;
@@ -844,12 +898,15 @@ async function poll() {
     if (offline && player && !dirty()) load();   // retour après un redémarrage
     renderStatus();
     renderJobs();
+    renderUdpStatus();
     if (jobs.filter((j) => j.state === "done").map((j) => j.id).join() !== doneBefore) {
       refreshMedia();   // une vidéo convertie vient d'arriver dans la médiathèque
     }
-    if (prev !== JSON.stringify([player?.state, player?.media, player?.gpio, player?.playlist?.index])) {
-      renderPlaylist();
-      renderTriggers();
+    if (prev !== JSON.stringify([player?.state, player?.media, player?.trigger, player?.playlist?.index])) {
+      // pas pendant une saisie : le champ en cours serait effacé
+      const editing = (id) => $(id).contains(document.activeElement);
+      if (cfg && !editing("playlist")) renderPlaylist();
+      if (cfg && !editing("triggers")) renderTriggers();
       renderMedia();
     }
   } catch {

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Lecteur vidéo plein écran piloté par GPIO (mpv + gpiod).
+"""Lecteur vidéo plein écran piloté par GPIO et UDP (mpv + gpiod).
 
 Modes :
   - loop        : playlist. Un seul média (vidéo ou image) tourne en boucle ;
                   plusieurs médias s'enchaînent dans l'ordre (vidéos répétées
                   un nombre de fois choisi, images affichées une durée
                   choisie), puis la liste recommence.
-  - interactive : un média d'accroche en boucle ; un bouton GPIO lance une
-                  vidéo, puis retour à l'accroche quand elle est terminée.
+  - interactive : un média d'accroche en boucle ; un bouton GPIO ou un message
+                  UDP lance une vidéo, puis retour à l'accroche quand elle est
+                  terminée.
+
+Messages UDP (port udp_port) : ceux des déclencheurs, plus pause, play et
+restart dans tous les modes.
 
 Le backend web communique avec ce processus via un socket unix
 (voir common.player_request) : commandes status, reload, trigger, pause.
@@ -32,7 +36,8 @@ import mpv
 from gpiod.line import Bias, Direction, Edge
 
 from common import (BASE, DATA_DIR, IMAGE_DURATION, MEDIA_DIR, SOCKET_PATH,
-                    SUBTITLE_SIZES,
+                    SUBTITLE_SIZES, UDP_COMMANDS, UDP_MAX_LEN, trigger_label,
+                    udp_key,
                     load_config, mdns_available, media_kind, network_addresses,
                     network_status)
 
@@ -153,6 +158,31 @@ class GpioWatcher:
             self.request.release()
 
 
+class UdpListener:
+    """Reçoit les messages UDP (un datagramme = un message texte)."""
+
+    def __init__(self, port, on_message):
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("0.0.0.0", port))
+        self.on_message = on_message
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            try:
+                data, addr = self.sock.recvfrom(1024)
+            except OSError:
+                return   # socket fermé
+            text = data.decode("utf-8", errors="replace").strip("\x00\r\n\t ")
+            if text:
+                self.on_message(text[:UDP_MAX_LEN * 2], addr[0])
+
+    def close(self):
+        self.sock.close()
+
+
 class Player:
     def __init__(self):
         self.events = queue.Queue()
@@ -161,6 +191,12 @@ class Player:
         self.current = None        # nom du média affiché
         self.current_sub = None    # sous-titres associés au média affiché
         self.current_gpio = None   # broche ayant lancé la vidéo en cours
+        self.current_trigger = None  # déclencheur (index) de la vidéo en cours
+        self.current_source = None   # « GPIO17 », « UDP « intro » »…
+        self.udp = None
+        self.udp_error = None
+        self.last_udp = None         # dernier message reçu (interface web)
+        self.last_udp_seen = (None, 0.0)   # anti-doublon (message, instant)
         self.loop_len = None       # durée d'un passage en boucle continue
         self.loop_index = 0        # numéro du passage en cours (sous-titres)
         self.playlist = []         # entrées de la playlist (plusieurs vidéos)
@@ -249,6 +285,7 @@ class Player:
             self.watcher = None
         self.cfg = load_config()
         self.last_error = None
+        self._open_udp(int(self.cfg.get("udp_port") or 0))
         self.mpv.volume = max(0, min(100, int(self.cfg.get("volume", 100))))
         self.mpv.audio_device = self.cfg.get("audio_device") or "auto"
         style = self.cfg["subtitle_style"]
@@ -267,7 +304,8 @@ class Player:
             self._show_splash("boot" if self.intro_played else "enter")
         elif self.cfg["mode"] == "interactive":
             inter = self.cfg["interactive"]
-            gpios = [t["gpio"] for t in inter["triggers"] if t.get("media")]
+            gpios = [t["gpio"] for t in inter["triggers"]
+                     if t.get("media") and t.get("gpio") is not None]
             try:
                 self.watcher = GpioWatcher(gpios, inter["active_low"],
                                            self._gpio_pressed)
@@ -296,21 +334,68 @@ class Player:
             self.paused = False
             self.mpv.pause = False
 
-    def _on_button(self, gpio):
+    def _open_udp(self, port):
+        if self.udp and self.udp.port == port:
+            return
+        if self.udp:
+            self.udp.close()
+            self.udp = None
+        self.udp_error = None
+        if not port:
+            return
+        try:
+            self.udp = UdpListener(port, self._udp_received)
+        except OSError as e:
+            self.udp_error = f"port UDP {port} indisponible : {e.strerror or e}"
+            log.error(self.udp_error)
+
+    def _find_trigger(self, match):
         if not self.cfg or self.cfg["mode"] != "interactive":
-            return
+            return None
+        for i, t in enumerate(self.cfg["interactive"]["triggers"]):
+            if t.get("media") and match(t):
+                return i
+        return None
+
+    def _on_button(self, gpio):
+        index = self._find_trigger(lambda t: t.get("gpio") == gpio)
+        if index is not None:
+            self._trigger(index, f"GPIO{gpio}")
+
+    def _on_udp(self, text, sender):
+        key = udp_key(text)
+        index = self._find_trigger(lambda t: t.get("udp") and udp_key(t["udp"]) == key)
+        if index is not None:
+            trigger = self.cfg["interactive"]["triggers"][index]
+            action = self._trigger(index, trigger_label({"udp": trigger["udp"]}))
+        elif key in ("pause", "play"):
+            active = self.state in ("loop", "attract", "triggered") and self.current
+            self._on_pause(key == "pause")
+            action = UDP_COMMANDS[key] if active else "ignoré : rien en lecture"
+        elif key == "restart":
+            self._on_reload()
+            action = UDP_COMMANDS[key]
+        else:
+            action = "inconnu"
+        log.info("UDP de %s : « %s » (%s)", sender, text, action)
+        self.last_udp = {"message": text, "from": sender, "time": time.time(),
+                         "action": action}
+
+    def _trigger(self, index, source):
+        """Lance la vidéo d'un déclencheur ; renvoie ce qui s'est passé."""
         inter = self.cfg["interactive"]
-        media = next((t["media"] for t in inter["triggers"]
-                      if t["gpio"] == gpio), None)
-        if not media:
-            return
+        trigger = inter["triggers"][index]
         if self.state == "triggered" and not inter["interruptible"]:
-            log.info("GPIO%d ignorée : vidéo en cours non interruptible", gpio)
-            return
-        log.info("GPIO%d -> %s", gpio, media)
-        if self._play(media, loop=False, muted=inter["triggers_muted"]):
-            self.state = "triggered"
-            self.current_gpio = gpio
+            log.info("%s ignoré : vidéo en cours non interruptible", source)
+            return "ignoré : vidéo en cours non interruptible"
+        log.info("%s -> %s", source, trigger["media"])
+        if not self._play(trigger["media"], loop=False, muted=inter["triggers_muted"]):
+            return "média introuvable"
+        self.state = "triggered"
+        self.current_gpio = trigger.get("gpio")
+        self.current_trigger = index
+        self.current_source = source
+        return f"lance {trigger['media']}"
 
     def _on_eof(self):
         if not self.mpv.eof_reached:
@@ -507,7 +592,7 @@ class Player:
 
     def _show_attract(self):
         inter = self.cfg["interactive"]
-        self.current_gpio = None
+        self.current_gpio = self.current_trigger = self.current_source = None
         if self._play(inter["attract"], loop=True, muted=inter["attract_muted"]):
             self.state = "attract"
         else:
@@ -626,7 +711,20 @@ class Player:
         self.last_press = now
         self.events.put(("button", gpio))
 
+    def _udp_received(self, text, sender):
+        # un même message répété aussitôt (émetteurs qui doublent l'envoi,
+        # l'UDP n'étant pas fiable) ne compte qu'une fois
+        now = time.monotonic()
+        key = udp_key(text)
+        last_key, last_time = self.last_udp_seen
+        self.last_udp_seen = (key, now)
+        if key == last_key and now - last_time < PRESS_LOCKOUT:
+            return
+        self.events.put(("udp", text, sender))
+
     def _shutdown(self):
+        if self.udp:
+            self.udp.close()
         if self.watcher:
             self.watcher.close()
         self.mpv.terminate()
@@ -666,6 +764,10 @@ class Player:
             "media": self.current,
             "subtitles": self.current_sub,
             "gpio": self.current_gpio,
+            "trigger": self.current_trigger,
+            "source": self.current_source,
+            "udp": {"port": self.udp.port if self.udp else None,
+                    "error": self.udp_error, "last": self.last_udp},
             "paused": self.paused,
             "playlist": playlist,
             "position": position,

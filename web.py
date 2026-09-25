@@ -2,6 +2,7 @@
 """Backend web d'administration du lecteur vidéo."""
 import json
 import os
+import socket
 import subprocess
 
 from flask import Flask, jsonify, render_template, request
@@ -9,8 +10,9 @@ from PIL import Image, ImageOps
 from werkzeug.utils import secure_filename
 
 from common import (IMAGE_DURATION, IMAGE_DURATION_MAX, MEDIA_DIR,
-                    SUBTITLE_SIZES, available_gpios, fps_of, load_config,
-                    media_kind, player_request, save_config)
+                    SUBTITLE_SIZES, UDP_COMMANDS, UDP_MAX_LEN, available_gpios,
+                    fps_of, load_config, media_kind, player_request,
+                    save_config, trigger_label, udp_key)
 from transcode import INCOMING_DIR, Converter
 
 app = Flask(__name__)
@@ -97,7 +99,7 @@ def media_usage(cfg, name):
         uses.append("accroche")
     for t in cfg["interactive"]["triggers"]:
         if t["media"] == name:
-            uses.append(f"GPIO{t['gpio']}")
+            uses.append(trigger_label(t))
     for video, sub in cfg["subtitles"].items():
         if sub == name:
             uses.append(f"sous-titres de {video}")
@@ -196,16 +198,34 @@ def validate(cfg):
     inter = cfg["interactive"]
     if inter.get("attract") and inter["attract"] not in playable:
         errors.append(f"accroche : média introuvable ({inter['attract']})")
-    seen = set()
+    seen, seen_udp = set(), set()
     for t in inter["triggers"]:
-        gpio = t.get("gpio")
-        if gpio not in gpios:
-            errors.append(f"GPIO{gpio} n'est pas disponible")
-        if gpio in seen:
-            errors.append(f"GPIO{gpio} est utilisée plusieurs fois")
-        seen.add(gpio)
+        gpio, udp, label = t.get("gpio"), t.get("udp"), trigger_label(t)
+        if gpio is None and not udp:
+            errors.append("déclencheur sans GPIO ni message UDP")
+        if gpio is not None:
+            if gpio not in gpios:
+                errors.append(f"GPIO{gpio} n'est pas disponible")
+            if gpio in seen:
+                errors.append(f"GPIO{gpio} est utilisée plusieurs fois")
+            seen.add(gpio)
+        if udp:
+            if udp_key(udp) in UDP_COMMANDS:
+                errors.append(f"message UDP « {udp} » réservé aux commandes "
+                              f"({', '.join(UDP_COMMANDS)})")
+            if udp_key(udp) in seen_udp:
+                errors.append(f"message UDP « {udp} » utilisé plusieurs fois")
+            seen_udp.add(udp_key(udp))
         if media.get(t.get("media")) != "video":
-            errors.append(f"GPIO{gpio} : choisissez une vidéo")
+            errors.append(f"{label} : choisissez une vidéo")
+
+    try:
+        port = int(cfg.get("udp_port"))
+        if not 1024 <= port <= 65535:
+            raise ValueError
+        cfg["udp_port"] = port
+    except (TypeError, ValueError):
+        errors.append("port UDP invalide (1024 à 65535)")
 
     for video, sub in cfg["subtitles"].items():
         if media.get(video) != "video" or media.get(sub) != "subtitle":
@@ -243,7 +263,7 @@ def api_status():
 def api_config():
     cfg = load_config()
     body = request.get_json(force=True)
-    for key in ("mode", "volume", "audio_device"):
+    for key in ("mode", "volume", "audio_device", "udp_port"):
         if key in body:
             cfg[key] = body[key]
     for key in ("loop", "interactive", "subtitle_style"):
@@ -257,10 +277,15 @@ def api_config():
                                 for it in cfg["loop"]["items"] if it.get("media")]
     except (TypeError, ValueError, KeyError):
         return jsonify(errors=["playlist : répétitions ou durée invalide"]), 400
-    cfg["interactive"]["triggers"] = [
-        {"gpio": int(t["gpio"]), "media": t.get("media")}
-        for t in cfg["interactive"]["triggers"]
-    ]
+    try:
+        cfg["interactive"]["triggers"] = [
+            {"gpio": None if t.get("gpio") in (None, "") else int(t["gpio"]),
+             "udp": (t.get("udp") or "").strip()[:UDP_MAX_LEN] or None,
+             "media": t.get("media")}
+            for t in cfg["interactive"]["triggers"]
+        ]
+    except (TypeError, ValueError):
+        return jsonify(errors=["déclencheur : GPIO invalide"]), 400
     errors = validate(cfg)
     if errors:
         return jsonify(errors=errors), 400
@@ -371,6 +396,17 @@ def api_system(action):
                              "(sudo ./install.sh)"), 403
     # la réponse part avant l'arrêt : systemctl rend la main tout de suite
     subprocess.Popen(["sudo", "-n", SYSTEMCTL, action])
+    return jsonify(ok=True)
+
+
+@app.post("/api/trigger-udp")
+def api_trigger_udp():
+    # test de bout en bout : un vrai datagramme, reçu comme ceux du réseau
+    message = str(request.get_json(force=True).get("message") or "").strip()
+    if not message:
+        return jsonify(error="message vide"), 400
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.sendto(message.encode(), ("127.0.0.1", int(load_config()["udp_port"])))
     return jsonify(ok=True)
 
 

@@ -66,6 +66,23 @@ Pour tester sans bouton câblé : [gpio-web](https://github.com/nopalpite/gpio-w
 - **Interactif** : une accroche (vidéo ou image) tourne en boucle ; un appui
   sur un bouton lance la vidéo associée, puis retour à l'accroche à la fin.
   Option : un appui peut ou non interrompre la vidéo en cours.
+  Chaque vidéo se lance par un bouton GPIO, un message UDP, ou les deux.
+
+## Commandes UDP
+
+Le lecteur écoute des messages texte en UDP (port 5000 par défaut, modifiable
+dans l'interface), un message par datagramme, sans tenir compte des majuscules
+ni des espaces ou retours à la ligne autour :
+
+- en mode interactif, le message d'un déclencheur lance sa vidéo ;
+- dans tous les modes : `pause`, `play` (reprise) et `restart` (relance
+  depuis le début).
+
+    echo film | nc -u -w1 rpi-microbiote.local 5000
+
+Un même message répété dans les 300 ms (émetteurs qui doublent l'envoi) ne
+compte qu'une fois. Le dernier message reçu, son expéditeur et son effet
+s'affichent dans l'interface.
 
 ## Démarrage
 
