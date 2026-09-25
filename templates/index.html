@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DarkSign</title>
+<script>
+  // thème choisi appliqué avant l'affichage : pas de flash clair au chargement
+  try {
+    const t = localStorage.getItem("theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch {}
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2032%2032%22%20aria-hidden%3D%22true%22%3E%3Cdefs%3E%3CradialGradient%20id%3D%22c%22%3E%3Cstop%20offset%3D%220.58%22%20stop-color%3D%22%23ffb054%22%20stop-opacity%3D%220%22/%3E%3Cstop%20offset%3D%220.63%22%20stop-color%3D%22%23fff3e0%22/%3E%3Cstop%20offset%3D%220.74%22%20stop-color%3D%22%23ffa23e%22%20stop-opacity%3D%22.75%22/%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23ff9030%22%20stop-opacity%3D%220%22/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2216%22%20fill%3D%22url%28%23c%29%22/%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%229.8%22%20fill%3D%22%230b0c0f%22/%3E%3C/svg%3E">
 <style>
   :root {
@@ -12,14 +19,24 @@
     --warn: #a16207;
     --err: #dc2626; --soft: #f0f2f5; --warn-bg: #fef3c7;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color-scheme: light;
   }
+  /* thème sombre : automatique (réglage du système) ou choisi dans l'en-tête */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #111418; --card: #1a1f25; --border: #2a313a; --text: #e6e9ed;
       --muted: #8b95a1; --soft: #222831; --warn: #facc15; --warn-bg: #3b2f0b;
       --accent: #f5a524; --on-accent: #1a1206;
+      color-scheme: dark;
     }
   }
+  :root[data-theme="dark"] {
+    --bg: #111418; --card: #1a1f25; --border: #2a313a; --text: #e6e9ed;
+    --muted: #8b95a1; --soft: #222831; --warn: #facc15; --warn-bg: #3b2f0b;
+    --accent: #f5a524; --on-accent: #1a1206;
+    color-scheme: dark;
+  }
+  .theme { margin-left: auto; font-size: 12px; padding: 4px 6px; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
   header {
@@ -152,6 +169,11 @@
     <span id="now">…</span>
     <span class="bar" id="progress" hidden><i></i></span>
   </div>
+  <select class="theme" id="theme" title="Thème de l'interface">
+    <option value="auto">◐ Auto</option>
+    <option value="light">☀ Clair</option>
+    <option value="dark">☾ Sombre</option>
+  </select>
   <div class="transport" id="transport" hidden>
     <button class="btn" id="pause">⏸ Pause</button>
     <button class="btn" id="restart" title="Relance la playlist ou l'accroche depuis le début">↺ Recommencer</button>
@@ -873,6 +895,17 @@ $("reboot").onclick = () => power("reboot",
 $("poweroff").onclick = () => power("poweroff",
   "Éteindre le Pi ? Il faudra couper puis remettre l'alimentation pour le rallumer.",
   "Extinction… vous pourrez couper l'alimentation dans quelques secondes");
+
+// --- thème ----------------------------------------------------------------------
+
+$("theme").value = document.documentElement.dataset.theme || "auto";
+$("theme").onchange = (e) => {
+  const t = e.target.value;
+  if (t === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try { t === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); }
+  catch {}
+};
 
 load();
 setInterval(poll, 1000);
