@@ -147,6 +147,15 @@
                border: 1px solid var(--border); background: var(--bg); color: var(--text); }
   code { font: 12px ui-monospace, monospace; background: var(--soft);
          padding: 1px 5px; border-radius: 4px; }
+  .health { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px; margin-bottom: 16px; }
+  .tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 17px; font-weight: 600; margin-top: 2px;
+                 font-variant-numeric: tabular-nums; }
+  .tile .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .tile.warn .value { color: var(--warn); }
+  .tile.err .value { color: var(--err); }
   .system { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
            background: var(--text); color: var(--bg); padding: 8px 16px;
@@ -288,6 +297,7 @@
 
   <section>
     <h2>Système</h2>
+    <div class="health" id="health"></div>
     <div class="system">
       <button class="btn" id="reboot">Redémarrer le Pi</button>
       <button class="btn danger" id="poweroff">Éteindre</button>
@@ -895,6 +905,7 @@ async function poll() {
     const data = await (await fetch("/api/status")).json();
     player = data.player;
     jobs = data.jobs;
+    renderHealth(data.health);
     if (offline && player && !dirty()) load();   // retour après un redémarrage
     renderStatus();
     renderJobs();
@@ -931,6 +942,50 @@ $("restart").onclick = async () => {
   toast(r.ok ? "Lecture relancée depuis le début" : (await r.json()).error);
   poll();
 };
+
+const fmtUptime = (s) => {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} j ${h} h` : h ? `${h} h ${String(m).padStart(2, "0")}` : `${m} min`;
+};
+
+function renderHealth(h) {
+  const box = $("health");
+  box.innerHTML = "";
+  if (!h) return;
+  const tile = (label, value, sub, level) => {
+    const t = document.createElement("div");
+    t.className = `tile ${level || ""}`;
+    t.innerHTML = `<div class="label"></div><div class="value"></div><div class="sub"></div>`;
+    t.children[0].textContent = label;
+    t.children[1].textContent = value;
+    t.children[2].textContent = sub || "";
+    box.append(t);
+  };
+  if (h.temp != null) {
+    // le Pi 3 ralentit vers 80 °C (60 °C sous alimentation insuffisante)
+    tile("Température", `${h.temp.toFixed(0)} °C`,
+      h.temp >= 80 ? "trop chaud : ralentissement" : h.temp >= 70 ? "chaud" : "normale",
+      h.temp >= 80 ? "err" : h.temp >= 70 ? "warn" : "");
+  }
+  if (h.power) {
+    const now = h.power.now, past = h.power.since_boot;
+    tile("Alimentation et fréquence",
+      now.length ? "Problème" : past.length ? "À surveiller" : "OK",
+      now.length ? now.join(", ") : past.length ? `depuis le démarrage : ${past.join(", ")}`
+        : "aucun ralentissement",
+      now.length ? "err" : past.length ? "warn" : "");
+  }
+  const d = h.disk;
+  tile("Carte SD", `${fmtSize(d.free)} libres`, `sur ${fmtSize(d.total)}`,
+    d.free < 5e8 ? "err" : d.free < 2e9 ? "warn" : "");
+  if (h.memory) {
+    tile("Mémoire", `${fmtSize(h.memory.available)} dispo`, `sur ${fmtSize(h.memory.total)}`,
+      h.memory.available < 5e7 ? "err" : h.memory.available < 1e8 ? "warn" : "");
+  }
+  tile("Charge processeur", `${Math.round(h.load / h.cpus * 100)} %`,
+    `moyenne sur 1 min (${h.cpus} cœurs)`, h.load / h.cpus > 0.9 ? "warn" : "");
+  if (h.uptime != null) tile("Allumé depuis", fmtUptime(h.uptime));
+}
 
 function renderSystem() {
   $("reboot").disabled = $("poweroff").disabled = !system.power;

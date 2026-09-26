@@ -137,6 +137,25 @@ Par défaut, bouton entre la GPIO et GND (pull-up interne activé par le
 lecteur). Le câblage vers 3V3 (pull-down) est sélectionnable dans l'interface.
 Les GPIO occupées par une fonction (UART, I2C, SPI...) ne sont pas proposées.
 
+La section Système de l'interface affiche l'état du Pi : température,
+alimentation insuffisante ou processeur ralenti (maintenant ou depuis le
+démarrage), espace libre sur la carte SD, mémoire, charge et temps depuis le
+démarrage. Un Pi 3 ralentit vers 80 °C : prévoir un dissipateur dans un
+boîtier fermé.
+
+### Écran en portrait
+
+Le lecteur ne tourne pas l'image : sur un Pi 3, la vidéo passe directement
+sur un plan d'affichage matériel qui ne sait pas la tourner, et la rotation
+par le GPU fait perdre 15 à 25 % des images en 1080p. Pour un écran monté en
+portrait, exportez le contenu déjà tourné (vidéo 1920×1080 dont l'image est
+couchée), par exemple :
+
+    ffmpeg -i portrait.mp4 -vf transpose=2 -c:a copy pour-ecran-tourne.mp4
+
+(`transpose=1` si l'écran est tourné dans l'autre sens.) Les sous-titres
+doivent alors être incrustés dans l'image.
+
 ## Conversion automatique des vidéos
 
 Chaque vidéo importée est analysée puis, si besoin, convertie en H.264

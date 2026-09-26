@@ -2,8 +2,10 @@
 """Backend web d'administration du lecteur vidéo."""
 import json
 import os
+import shutil
 import socket
 import subprocess
+import time
 
 from flask import Flask, jsonify, render_template, request
 from PIL import Image, ImageOps
@@ -256,7 +258,8 @@ def api_state():
 
 @app.get("/api/status")
 def api_status():
-    return jsonify(player=player_status(), jobs=converter.list())
+    return jsonify(player=player_status(), jobs=converter.list(),
+                   health=system_health())
 
 
 @app.post("/api/config")
@@ -379,6 +382,55 @@ def api_restart():
         return jsonify(player_request("reload"))
     except OSError:
         return jsonify(error="lecteur injoignable"), 503
+
+
+# vcgencmd get_throttled : bits « maintenant » (0-3) et « depuis le démarrage » (16-19)
+THROTTLE_FLAGS = [
+    (0, "under_voltage", "alimentation insuffisante"),
+    (1, "freq_capped", "fréquence plafonnée"),
+    (2, "throttled", "processeur ralenti"),
+    (3, "temp_limit", "limite de température atteinte"),
+]
+_health = {"time": 0, "data": None}
+
+
+def system_health():
+    """Santé du Pi (mise en cache 5 s : l'interface interroge chaque seconde)."""
+    if time.monotonic() - _health["time"] < 5:
+        return _health["data"]
+    data = {}
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            data["temp"] = round(int(f.read()) / 1000, 1)
+    except (OSError, ValueError):
+        data["temp"] = None
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
+                             text=True, timeout=5).stdout
+        bits = int(out.strip().split("=")[1], 16)
+        data["power"] = {
+            "now": [label for bit, _, label in THROTTLE_FLAGS if bits >> bit & 1],
+            "since_boot": [label for bit, _, label in THROTTLE_FLAGS
+                           if bits >> (bit + 16) & 1],
+        }
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
+        data["power"] = None
+    disk = shutil.disk_usage(MEDIA_DIR)
+    data["disk"] = {"free": disk.free, "total": disk.total}
+    try:
+        mem = dict(line.split(":") for line in open("/proc/meminfo"))
+        kb = lambda k: int(mem[k].split()[0]) * 1024
+        data["memory"] = {"available": kb("MemAvailable"), "total": kb("MemTotal")}
+    except (OSError, KeyError, ValueError):
+        data["memory"] = None
+    data["load"] = round(os.getloadavg()[0], 2)
+    data["cpus"] = os.cpu_count()
+    try:
+        data["uptime"] = float(open("/proc/uptime").read().split()[0])
+    except (OSError, ValueError):
+        data["uptime"] = None
+    _health.update(time=time.monotonic(), data=data)
+    return data
 
 
 def system_allowed(action):
